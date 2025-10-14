@@ -58,16 +58,22 @@ export function verifyMondaySessionToken(token: string): MondaySessionClaims {
       throw new UnauthorizedError("Invalid monday session token payload");
     }
     const rawClaims = decoded as Record<string, unknown>;
+    const accountObj = rawClaims.account as Record<string, unknown> | undefined;
+    const userObj = rawClaims.user as Record<string, unknown> | undefined;
+    const contextObj = rawClaims.context as Record<string, unknown> | undefined;
+    const contextAccount = contextObj?.account as Record<string, unknown> | undefined;
+    const contextUser = contextObj?.user as Record<string, unknown> | undefined;
+
     const accountId =
       (rawClaims.accountId as number | string | undefined) ??
       (rawClaims.account_id as number | string | undefined) ??
-      ((rawClaims.account as Record<string, unknown> | undefined)?.id as number | string | undefined) ??
-      ((rawClaims.context as Record<string, unknown> | undefined)?.account as Record<string, unknown> | undefined)?.id;
+      (accountObj?.id as number | string | undefined) ??
+      (contextAccount?.id as number | string | undefined);
     const userId =
       (rawClaims.userId as number | string | undefined) ??
       (rawClaims.user_id as number | string | undefined) ??
-      ((rawClaims.user as Record<string, unknown> | undefined)?.id as number | string | undefined) ??
-      ((rawClaims.context as Record<string, unknown> | undefined)?.user as Record<string, unknown> | undefined)?.id;
+      (userObj?.id as number | string | undefined) ??
+      (contextUser?.id as number | string | undefined);
 
     if (!accountId || !userId) {
       throw new UnauthorizedError("Session token missing required claims");
@@ -75,7 +81,8 @@ export function verifyMondaySessionToken(token: string): MondaySessionClaims {
 
     const userEmail =
       (rawClaims.userEmail as string | undefined) ??
-      ((rawClaims.user as Record<string, unknown> | undefined)?.email as string | undefined);
+      (userObj?.email as string | undefined) ??
+      (contextUser?.email as string | undefined);
 
     const normalizedClaims: MondaySessionClaims = {
       ...(decoded as JwtPayload),
@@ -83,7 +90,8 @@ export function verifyMondaySessionToken(token: string): MondaySessionClaims {
       userId,
       userEmail,
       account: {
-        ...(rawClaims.account as Record<string, unknown> | undefined),
+        ...(accountObj ?? {}),
+        ...(contextAccount ?? {}),
         id: accountId
       }
     };
