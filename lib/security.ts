@@ -46,7 +46,13 @@ export type MondaySessionClaims = JwtPayload & {
   userEmail?: string;
   account?: {
     id?: number | string;
+    uuid?: string | number;
     slug?: string;
+  };
+  user?: {
+    id?: number | string;
+    uuid?: string | number;
+    email?: string;
   };
 };
 
@@ -64,16 +70,32 @@ export function verifyMondaySessionToken(token: string): MondaySessionClaims {
     const contextAccount = contextObj?.account as Record<string, unknown> | undefined;
     const contextUser = contextObj?.user as Record<string, unknown> | undefined;
 
+    const extractId = (value: unknown): string | number | undefined => {
+      if (typeof value === "string" && value.trim().length > 0) {
+        return value;
+      }
+      if (typeof value === "number") {
+        return value;
+      }
+      return undefined;
+    };
+
     const accountId =
-      (rawClaims.accountId as number | string | undefined) ??
-      (rawClaims.account_id as number | string | undefined) ??
-      (accountObj?.id as number | string | undefined) ??
-      (contextAccount?.id as number | string | undefined);
+      extractId(rawClaims.accountId) ??
+      extractId(rawClaims.account_id) ??
+      extractId(accountObj?.id) ??
+      extractId(accountObj?.uuid) ??
+      extractId(accountObj?.slug) ??
+      extractId(contextAccount?.id) ??
+      extractId(contextAccount?.uuid) ??
+      extractId(contextAccount?.slug);
     const userId =
-      (rawClaims.userId as number | string | undefined) ??
-      (rawClaims.user_id as number | string | undefined) ??
-      (userObj?.id as number | string | undefined) ??
-      (contextUser?.id as number | string | undefined);
+      extractId(rawClaims.userId) ??
+      extractId(rawClaims.user_id) ??
+      extractId(userObj?.id) ??
+      extractId(userObj?.uuid) ??
+      extractId(contextUser?.id) ??
+      extractId(contextUser?.uuid);
 
     if (!accountId || !userId) {
       throw new UnauthorizedError("Session token missing required claims");
@@ -92,7 +114,15 @@ export function verifyMondaySessionToken(token: string): MondaySessionClaims {
       account: {
         ...(accountObj ?? {}),
         ...(contextAccount ?? {}),
+        uuid: extractId(accountObj?.uuid) ?? extractId(contextAccount?.uuid),
         id: accountId
+      },
+      user: {
+        ...(userObj ?? {}),
+        ...(contextUser ?? {}),
+        uuid: extractId(userObj?.uuid) ?? extractId(contextUser?.uuid),
+        id: userId,
+        email: userEmail
       }
     };
 
