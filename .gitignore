@@ -13,3 +13,5 @@ pnpm-debug.log
 vitest.config.ts.timestamp*
 package-lock.json
 yarn.lock
+
+.vercel

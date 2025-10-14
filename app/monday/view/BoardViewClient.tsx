@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState, useTransition } from "react";
+import mondaySdk from "monday-sdk-js";
 import type { RecipeDefinition, RecipePreviewResult } from "@/lib/recipe-engine";
 import type { PlanFlags } from "@/lib/entitlements";
 import { UploadDropzone } from "@/components/UploadDropzone";
@@ -239,6 +240,7 @@ type BoardViewClientProps = {
 export default function BoardViewClient({ token }: BoardViewClientProps) {
   const [context, setContext] = useState<MondayContext | null>(null);
   const [contextError, setContextError] = useState<string | null>(null);
+  const [sessionToken, setSessionToken] = useState<string | null>(token);
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>(templates[0]?.id ?? "");
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<(RecipePreviewResult & { runId?: string }) | null>(null);
@@ -248,10 +250,54 @@ export default function BoardViewClient({ token }: BoardViewClientProps) {
   const [isPreviewing, startPreview] = useTransition();
   const [isExecuting, startExecute] = useTransition();
 
+  const mondayClient = useMemo(() => {
+    if (typeof window === "undefined") {
+      return null;
+    }
+    return mondaySdk();
+  }, []);
+
   const selectedTemplate = useMemo(
     () => templates.find((template) => template.id === selectedTemplateId) ?? templates[0],
     [selectedTemplateId]
   );
+
+  useEffect(() => {
+    if (token) {
+      setSessionToken(token);
+      return;
+    }
+
+    if (process.env.NEXT_PUBLIC_ENABLE_STUB_CONTEXT === "1") {
+      setContext(STUB_CONTEXT);
+      setContextError(null);
+      return;
+    }
+
+    if (!mondayClient) {
+      return;
+    }
+
+    let mounted = true;
+    mondayClient
+      .get("sessionToken")
+      .then((result: { data?: string }) => {
+        if (!mounted) return;
+        if (result?.data) {
+          setSessionToken(result.data);
+        } else {
+          setContextError("Unable to retrieve monday session token.");
+        }
+      })
+      .catch((error: unknown) => {
+        if (!mounted) return;
+        setContextError((error as Error).message ?? "Failed to retrieve monday session token.");
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, [token, mondayClient]);
 
   useEffect(() => {
     if (process.env.NEXT_PUBLIC_ENABLE_STUB_CONTEXT === "1") {
@@ -260,14 +306,10 @@ export default function BoardViewClient({ token }: BoardViewClientProps) {
       return;
     }
 
-    if (!token) {
-      if (process.env.NEXT_PUBLIC_ENABLE_STUB_CONTEXT === "1") {
-        setContext(STUB_CONTEXT);
-      } else {
-        setContextError("Missing monday context token. Launch this app from a monday board.");
-      }
+    if (!sessionToken) {
       return;
     }
+
     let cancelled = false;
     (async () => {
       try {
@@ -276,7 +318,7 @@ export default function BoardViewClient({ token }: BoardViewClientProps) {
           headers: {
             "Content-Type": "application/json"
           },
-          body: JSON.stringify({ token })
+          body: JSON.stringify({ token: sessionToken })
         });
         if (!response.ok) {
           throw new Error(await response.text());
@@ -284,14 +326,11 @@ export default function BoardViewClient({ token }: BoardViewClientProps) {
         const result = (await response.json()) as MondayContext;
         if (!cancelled) {
           setContext(result);
+          setContextError(null);
         }
       } catch (error) {
         if (!cancelled) {
-          if (process.env.NEXT_PUBLIC_ENABLE_STUB_CONTEXT === "1") {
-            setContext(STUB_CONTEXT);
-          } else {
-            setContextError((error as Error).message);
-          }
+          setContextError((error as Error).message);
         }
       }
     })();
@@ -299,7 +338,7 @@ export default function BoardViewClient({ token }: BoardViewClientProps) {
     return () => {
       cancelled = true;
     };
-  }, [token]);
+  }, [sessionToken]);
 
   const planAllowsFuzzy = context?.flags.fuzzyMatching ?? false;
   const needsPremium = context ? !!selectedTemplate?.premium && !planAllowsFuzzy : false;

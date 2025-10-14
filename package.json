@@ -11,8 +11,7 @@
     "format": "prettier --check .",
     "test": "npm run test:unit && npm run test:e2e",
     "test:unit": "vitest run",
-    "test:e2e": "playwright test",
-    "prepare": "playwright install --with-deps"
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "@radix-ui/react-slot": "1.0.2",
@@ -21,6 +20,7 @@
     "clsx": "2.1.1",
     "date-fns": "3.6.0",
     "libphonenumber-js": "1.11.8",
+    "monday-sdk-js": "0.5.6",
     "next": "14.2.3",
     "papaparse": "5.4.1",
     "react": "18.2.0",
@@ -52,7 +52,6 @@
     "vitest": "1.5.2"
   },
   "engines": {
-    "node": ">=20.11.0",
-    "pnpm": ">=8.15.0"
+    "node": "20.x"
   }
 }
