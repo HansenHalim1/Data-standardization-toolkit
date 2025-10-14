@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { verifyMondayContext } from "@/lib/security";
+import { verifyMondaySessionToken } from "@/lib/security";
 import { getServiceSupabase } from "@/lib/db";
 import { flagsForPlan } from "@/lib/entitlements";
 import { createLogger } from "@/lib/logging";
@@ -10,24 +10,26 @@ type UsageRecord = Pick<Database["public"]["Tables"]["usage_monthly"]["Row"], "r
 
 export async function POST(request: Request) {
   const logger = createLogger({ component: "monday.context.verify" });
-  const body = await request.json().catch(() => null);
-  const token = body?.token as string | undefined;
+  const authHeader = request.headers.get("authorization") ?? "";
+  const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
   if (!token) {
-    return new NextResponse("Missing monday token", { status: 400 });
-  }
-
-  const secret = process.env.MONDAY_APP_SIGNING_SECRET;
-  if (!secret) {
-    return new NextResponse("Missing monday signing secret", { status: 500 });
+    return new NextResponse("Missing monday token", { status: 401 });
   }
 
   try {
-    const context = verifyMondayContext({ token, secret });
+    const claims = verifyMondaySessionToken(token);
+    const accountId =
+      (claims.accountId ? String(claims.accountId) : undefined) ??
+      (claims.account?.id ? String(claims.account.id) : undefined);
+    if (!accountId) {
+      throw new Error("Session token missing account identifier");
+    }
+
     const supabase = getServiceSupabase();
     const { data: tenantData } = await supabase
       .from("tenants")
       .select("id, plan, seats")
-      .eq("monday_account_id", context.accountId)
+      .eq("monday_account_id", accountId)
       .maybeSingle();
 
     const tenant = tenantData as TenantRecord | null;
@@ -56,6 +58,11 @@ export async function POST(request: Request) {
       flags,
       usage: {
         rowsProcessed: usage?.rows_processed ?? 0
+      },
+      claims: {
+        accountId,
+        userId: claims.userId,
+        userEmail: claims.userEmail
       }
     });
   } catch (error) {

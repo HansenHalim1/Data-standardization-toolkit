@@ -1,17 +1,11 @@
 import { test, expect } from "@playwright/test";
-import { createHmac } from "crypto";
-
-function createMondayToken(payload: Record<string, unknown>, secret: string) {
-  const json = JSON.stringify(payload);
-  const encoded = Buffer.from(json).toString("base64");
-  const signature = createHmac("sha256", secret).update(json).digest("base64");
-  return `${encoded}.${signature}`;
-}
+import jwt from "jsonwebtoken";
 
 test("board view preview and execute flow", async ({ page }) => {
-  const token = createMondayToken(
+  const token = jwt.sign(
     { accountId: "demo-account", userId: "user-1", region: "us-east-1" },
-    process.env.MONDAY_APP_SIGNING_SECRET ?? "test-secret"
+    process.env.MONDAY_CLIENT_SECRET ?? "test-secret",
+    { expiresIn: "5m" }
   );
 
   await page.goto(`/monday/view?token=${encodeURIComponent(token)}`);
@@ -55,3 +49,4 @@ test("board view preview and execute flow", async ({ page }) => {
     timeout: 10_000
   });
 });
+

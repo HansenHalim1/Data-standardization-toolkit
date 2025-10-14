@@ -22,10 +22,9 @@ export default defineConfig({
     port: 3000,
     reuseExistingServer: !process.env.CI,
     env: {
-      MONDAY_APP_SIGNING_SECRET: "test-secret",
+      MONDAY_CLIENT_SECRET: "test-secret",
       ENABLE_SUPABASE_STUB: "1",
-      NODE_ENV: "development",
-      NEXT_PUBLIC_ENABLE_STUB_CONTEXT: "1"
+      NODE_ENV: "development"
     }
   }
 });

@@ -1,10 +1,6 @@
 import { createHmac, timingSafeEqual } from "crypto";
+import jwt, { type JwtPayload } from "jsonwebtoken";
 import { UnauthorizedError } from "./errors";
-
-type VerifyContextInput = {
-  token: string;
-  secret: string;
-};
 
 export function signPayload(payload: string, secret: string) {
   return createHmac("sha256", secret).update(payload, "utf8").digest("base64");
@@ -16,27 +12,6 @@ export function verifySignature(payload: string, signature: string, secret: stri
     return timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
   } catch {
     return false;
-  }
-}
-
-export function verifyMondayContext({ token, secret }: VerifyContextInput) {
-  const [encoded, signature] = token.split(".");
-  if (!encoded || !signature) {
-    throw new UnauthorizedError("Invalid monday context token");
-  }
-  const payload = Buffer.from(encoded, "base64").toString("utf8");
-  if (!verifySignature(payload, signature, secret)) {
-    throw new UnauthorizedError("Failed monday context signature verification");
-  }
-  try {
-    return JSON.parse(payload) as {
-      accountId: string;
-      userId: string;
-      userEmail?: string;
-      region?: string;
-    };
-  } catch (error) {
-    throw new UnauthorizedError(`Unable to parse monday context payload: ${(error as Error).message}`);
   }
 }
 
@@ -54,5 +29,42 @@ export function assertWebhookSignature({
   }
   if (!verifySignature(rawBody, signature, secret)) {
     throw new UnauthorizedError("Invalid webhook signature");
+  }
+}
+
+function assertMondayClientSecret(): string {
+  const secret = process.env.MONDAY_CLIENT_SECRET;
+  if (!secret) {
+    throw new UnauthorizedError("Missing monday client secret configuration");
+  }
+  return secret;
+}
+
+export type MondaySessionClaims = JwtPayload & {
+  accountId: number | string;
+  userId: number | string;
+  userEmail?: string;
+  account?: {
+    id?: number | string;
+    slug?: string;
+  };
+};
+
+export function verifyMondaySessionToken(token: string): MondaySessionClaims {
+  const secret = assertMondayClientSecret();
+  try {
+    const decoded = jwt.verify(token, secret);
+    if (!decoded || typeof decoded !== "object") {
+      throw new UnauthorizedError("Invalid monday session token payload");
+    }
+    const claims = decoded as MondaySessionClaims;
+    if (!claims.accountId || !claims.userId) {
+      throw new UnauthorizedError("Session token missing required claims");
+    }
+    return claims;
+  } catch (error) {
+    throw new UnauthorizedError(
+      `Monday session token verification failed: ${(error as Error).message ?? "Unknown error"}`
+    );
   }
 }

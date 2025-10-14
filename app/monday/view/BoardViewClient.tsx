@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState, useTransition } from "react";
+import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
 import mondaySdk from "monday-sdk-js";
 import type { RecipeDefinition, RecipePreviewResult } from "@/lib/recipe-engine";
 import type { PlanFlags } from "@/lib/entitlements";
@@ -23,23 +23,6 @@ type MondayContext = {
   usage: {
     rowsProcessed: number;
   };
-};
-
-const STUB_CONTEXT: MondayContext = {
-  tenantId: "11111111-1111-1111-1111-111111111111",
-  plan: "pro",
-  seats: 10,
-  flags: {
-    plan: "pro",
-    rowCap: 50000,
-    fuzzyMatching: true,
-    schedules: true,
-    apiAccess: true,
-    seats: 10
-  },
-  usage: {
-    rowsProcessed: 0
-  }
 };
 
 type Template = {
@@ -233,14 +216,9 @@ const templates: Template[] = [
   }
 ];
 
-type BoardViewClientProps = {
-  token: string | null;
-};
-
-export default function BoardViewClient({ token }: BoardViewClientProps) {
+export default function BoardViewClient() {
   const [context, setContext] = useState<MondayContext | null>(null);
   const [contextError, setContextError] = useState<string | null>(null);
-  const [sessionToken, setSessionToken] = useState<string | null>(token);
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>(templates[0]?.id ?? "");
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<(RecipePreviewResult & { runId?: string }) | null>(null);
@@ -262,63 +240,37 @@ export default function BoardViewClient({ token }: BoardViewClientProps) {
     [selectedTemplateId]
   );
 
-  useEffect(() => {
-    if (token) {
-      setSessionToken(token);
-      return;
-    }
-
-    if (process.env.NEXT_PUBLIC_ENABLE_STUB_CONTEXT === "1") {
-      setContext(STUB_CONTEXT);
-      setContextError(null);
-      return;
-    }
-
+  const getSessionToken = useCallback(async () => {
     if (!mondayClient) {
-      return;
+      throw new Error("Missing monday context token. Launch this app from a monday board.");
     }
-
-    let mounted = true;
-    mondayClient
-      .get("sessionToken")
-      .then((result: { data?: string }) => {
-        if (!mounted) return;
-        if (result?.data) {
-          setSessionToken(result.data);
-        } else {
-          setContextError("Unable to retrieve monday session token.");
-        }
-      })
-      .catch((error: unknown) => {
-        if (!mounted) return;
-        setContextError((error as Error).message ?? "Failed to retrieve monday session token.");
-      });
-
-    return () => {
-      mounted = false;
-    };
-  }, [token, mondayClient]);
+    const result: { data?: string } = await mondayClient.get("sessionToken");
+    const token = result?.data;
+    if (!token) {
+      throw new Error("Unable to retrieve monday session token.");
+    }
+    return token;
+  }, [mondayClient]);
 
   useEffect(() => {
-    if (process.env.NEXT_PUBLIC_ENABLE_STUB_CONTEXT === "1") {
-      setContext(STUB_CONTEXT);
-      setContextError(null);
-      return;
-    }
-
-    if (!sessionToken) {
+    if (!mondayClient) {
+      setContextError("Missing monday context token. Launch this app from a monday board.");
+      setContext(null);
       return;
     }
 
     let cancelled = false;
     (async () => {
       try {
+        const sessionToken = await getSessionToken();
+        if (cancelled) {
+          return;
+        }
         const response = await fetch("/api/monday/context/verify", {
           method: "POST",
           headers: {
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify({ token: sessionToken })
+            Authorization: `Bearer ${sessionToken}`
+          }
         });
         if (!response.ok) {
           throw new Error(await response.text());
@@ -330,7 +282,8 @@ export default function BoardViewClient({ token }: BoardViewClientProps) {
         }
       } catch (error) {
         if (!cancelled) {
-          setContextError((error as Error).message);
+          setContextError((error as Error).message ?? "Failed to verify monday context token.");
+          setContext(null);
         }
       }
     })();
@@ -338,7 +291,7 @@ export default function BoardViewClient({ token }: BoardViewClientProps) {
     return () => {
       cancelled = true;
     };
-  }, [sessionToken]);
+  }, [mondayClient, getSessionToken]);
 
   const planAllowsFuzzy = context?.flags.fuzzyMatching ?? false;
   const needsPremium = context ? !!selectedTemplate?.premium && !planAllowsFuzzy : false;
@@ -400,6 +353,7 @@ export default function BoardViewClient({ token }: BoardViewClientProps) {
                 if (!uploadedFile || !context || !selectedTemplate) return;
                 startPreview(async () => {
                   try {
+                    const sessionToken = await getSessionToken();
                     const formData = new FormData();
                     formData.set("file", uploadedFile);
                     formData.set("tenantId", context.tenantId);
@@ -407,6 +361,9 @@ export default function BoardViewClient({ token }: BoardViewClientProps) {
                     formData.set("plan", context.plan);
                     const response = await fetch("/api/recipes/run/preview", {
                       method: "POST",
+                      headers: {
+                        Authorization: `Bearer ${sessionToken}`
+                      },
                       body: formData
                     });
                     if (!response.ok) {
@@ -461,10 +418,12 @@ export default function BoardViewClient({ token }: BoardViewClientProps) {
                   if (!preview || !context || !selectedTemplate) return;
                   startExecute(async () => {
                     try {
+                      const sessionToken = await getSessionToken();
                       const response = await fetch("/api/recipes/run/execute", {
                         method: "POST",
                         headers: {
-                          "Content-Type": "application/json"
+                          "Content-Type": "application/json",
+                          Authorization: `Bearer ${sessionToken}`
                         },
                         body: JSON.stringify({
                           tenantId: context.tenantId,
@@ -499,3 +458,4 @@ export default function BoardViewClient({ token }: BoardViewClientProps) {
     </div>
   );
 }
+

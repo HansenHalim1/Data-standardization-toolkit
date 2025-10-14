@@ -62,7 +62,7 @@ pnpm install
 pnpm dev
 ```
 
-Open `http://localhost:3000` for the marketing site, or `http://localhost:3000/monday/view?token=<signed-token>` for the embedded board app. Use the `/api/monday/context/verify` endpoint to validate HMAC tokens generated with your signing secret.
+Open `http://localhost:3000` for the marketing site. To exercise the embedded board app, load `http://localhost:3000/monday/view` inside the monday.com board view (e.g., via the monday CLI preview or by installing the app on a test board). The iframe uses `monday-sdk-js` to fetch a fresh `sessionToken` for every API request and sends it in `Authorization: Bearer <token>` headers—there is no URL token support.
 
 ## Testing
 
@@ -84,7 +84,7 @@ CI (`.github/workflows/ci.yml`) mirrors the above, ensuring lint/typecheck/unit/
 
 - `lib/logging.ts` provides structured JSON logs with request IDs/tenant info and PII redaction.
 - `/api/health` outputs `{ ok, time, version }` for uptime checks.
-- Monday context + webhook signatures validated via HMAC (`lib/security.ts`).
+- Monday board view session tokens are verified with `MONDAY_CLIENT_SECRET` (`verifyMondaySessionToken` in `lib/security.ts`); webhook payloads continue to use HMAC signatures.
 - Service role key usage is isolated to server-only `getServiceSupabase()` (no client exposure).
 
 ## Deployment
