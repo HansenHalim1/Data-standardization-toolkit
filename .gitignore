@@ -1,0 +1,15 @@
+.next/
+node_modules/
+dist/
+out/
+.env
+.env.local
+.env.production
+.env.development
+coverage/
+playwright-report/
+test-results/
+pnpm-debug.log
+vitest.config.ts.timestamp*
+package-lock.json
+yarn.lock

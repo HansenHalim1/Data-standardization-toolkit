@@ -1,0 +1,17 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "version": 2,
+  "public": false,
+  "framework": "nextjs",
+  "environment": {
+    "NODE_ENV": "production"
+  },
+  "buildCommand": "pnpm install && pnpm build",
+  "outputDirectory": ".next",
+  "functions": {
+    "api/**/*.func": {
+      "memory": 1024,
+      "maxDuration": 60
+    }
+  }
+}

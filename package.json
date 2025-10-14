@@ -1,0 +1,58 @@
+{
+  "name": "data-standardization-toolkit",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "format": "prettier --check .",
+    "test": "npm run test:unit && npm run test:e2e",
+    "test:unit": "vitest run",
+    "test:e2e": "playwright test",
+    "prepare": "playwright install --with-deps"
+  },
+  "dependencies": {
+    "@radix-ui/react-slot": "1.0.2",
+    "@supabase/supabase-js": "2.43.1",
+    "class-variance-authority": "0.7.0",
+    "clsx": "2.1.1",
+    "date-fns": "3.6.0",
+    "libphonenumber-js": "1.11.8",
+    "next": "14.2.3",
+    "papaparse": "5.4.1",
+    "react": "18.2.0",
+    "react-dom": "18.2.0",
+    "tailwind-merge": "2.3.0",
+    "tailwindcss-animate": "1.0.7",
+    "uuid": "9.0.1",
+    "xlsx": "0.18.5",
+    "zod": "3.22.4"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.44.1",
+    "@types/node": "20.12.7",
+    "@types/react": "18.2.74",
+    "@types/react-dom": "18.2.23",
+    "@types/uuid": "9.0.7",
+    "@types/papaparse": "5.3.12",
+    "@typescript-eslint/eslint-plugin": "7.8.0",
+    "@typescript-eslint/parser": "7.8.0",
+    "@vitest/coverage-v8": "1.5.2",
+    "autoprefixer": "10.4.17",
+    "eslint": "8.57.0",
+    "eslint-config-next": "14.2.3",
+    "postcss": "8.4.38",
+    "prettier": "3.2.5",
+    "prettier-plugin-tailwindcss": "0.5.14",
+    "tailwindcss": "3.4.4",
+    "typescript": "5.4.5",
+    "vitest": "1.5.2"
+  },
+  "engines": {
+    "node": ">=20.11.0",
+    "pnpm": ">=8.15.0"
+  }
+}
