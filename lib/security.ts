@@ -57,11 +57,38 @@ export function verifyMondaySessionToken(token: string): MondaySessionClaims {
     if (!decoded || typeof decoded !== "object") {
       throw new UnauthorizedError("Invalid monday session token payload");
     }
-    const claims = decoded as MondaySessionClaims;
-    if (!claims.accountId || !claims.userId) {
+    const rawClaims = decoded as Record<string, unknown>;
+    const accountId =
+      (rawClaims.accountId as number | string | undefined) ??
+      (rawClaims.account_id as number | string | undefined) ??
+      ((rawClaims.account as Record<string, unknown> | undefined)?.id as number | string | undefined) ??
+      ((rawClaims.context as Record<string, unknown> | undefined)?.account as Record<string, unknown> | undefined)?.id;
+    const userId =
+      (rawClaims.userId as number | string | undefined) ??
+      (rawClaims.user_id as number | string | undefined) ??
+      ((rawClaims.user as Record<string, unknown> | undefined)?.id as number | string | undefined) ??
+      ((rawClaims.context as Record<string, unknown> | undefined)?.user as Record<string, unknown> | undefined)?.id;
+
+    if (!accountId || !userId) {
       throw new UnauthorizedError("Session token missing required claims");
     }
-    return claims;
+
+    const userEmail =
+      (rawClaims.userEmail as string | undefined) ??
+      ((rawClaims.user as Record<string, unknown> | undefined)?.email as string | undefined);
+
+    const normalizedClaims: MondaySessionClaims = {
+      ...(decoded as JwtPayload),
+      accountId,
+      userId,
+      userEmail,
+      account: {
+        ...(rawClaims.account as Record<string, unknown> | undefined),
+        id: accountId
+      }
+    };
+
+    return normalizedClaims;
   } catch (error) {
     throw new UnauthorizedError(
       `Monday session token verification failed: ${(error as Error).message ?? "Unknown error"}`
