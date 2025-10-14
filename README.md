@@ -31,8 +31,6 @@ tests/              # Vitest unit + Playwright e2e suites
 
 ## Environment Variables
 
-Copy `.env.example` to `.env.local` and populate:
-
 ```
 NEXT_PUBLIC_APP_URL=http://localhost:3000
 SUPABASE_URL=<your-supabase-url>
