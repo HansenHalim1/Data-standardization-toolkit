@@ -148,7 +148,9 @@ function formatColumnValue(rawValue: unknown, columnType?: string): unknown | nu
       return dateValue ? { date: dateValue } : null;
     }
     default:
-      return normalized;
+      return {
+        text: normalized
+      };
   }
 }
 
