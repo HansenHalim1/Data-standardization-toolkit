@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
 import mondaySdk from "monday-sdk-js";
-import type { RecipeDefinition, RecipePreviewResult } from "@/lib/recipe-engine";
+import type { RecipeDefinition, RecipePreviewResult, WriteBackStep } from "@/lib/recipe-engine";
 import type { PlanFlags } from "@/lib/entitlements";
 import { UploadDropzone } from "@/components/UploadDropzone";
 import { DataGridPreview } from "@/components/DataGridPreview";
@@ -256,6 +256,10 @@ export default function BoardViewClient() {
   const [boardsError, setBoardsError] = useState<string | null>(null);
   const [selectedBoardId, setSelectedBoardId] = useState<string>("");
   const [sourceBoard, setSourceBoard] = useState<PreviewResponse["sourceBoard"] | null>(null);
+  const [writeBoardId, setWriteBoardId] = useState<string>("");
+  const [writeBoardName, setWriteBoardName] = useState<string>("");
+  const [writeBoardError, setWriteBoardError] = useState<string | null>(null);
+  const [isPreparingWriteBoard, setPreparingWriteBoard] = useState(false);
 
   const mondayClient = useMemo(() => {
     if (typeof window === "undefined") {
@@ -302,13 +306,90 @@ export default function BoardViewClient() {
       setBoardsError(null);
       const boardsList = await loadBoards();
       setBoards(boardsList);
+      if (writeBoardId) {
+        const matching = boardsList.find((board) => board.id === writeBoardId);
+        if (matching) {
+          setWriteBoardName(matching.name);
+        }
+      }
     } catch (error) {
       setBoards([]);
       setBoardsError((error as Error).message ?? "Failed to load boards.");
     } finally {
       setLoadingBoards(false);
     }
-  }, [loadBoards]);
+  }, [loadBoards, writeBoardId]);
+
+  const handleWriteBoardSelect = useCallback(
+    async (boardId: string, options?: { prepared?: RecipeDefinition | null; boardName?: string }) => {
+      setWriteBoardId(boardId);
+      const board = boards.find((entry) => entry.id === boardId);
+      const resolvedName = options?.boardName ?? board?.name ?? "";
+      setWriteBoardName(resolvedName);
+
+      if (!boardId) {
+        if (options?.prepared ?? null) {
+          setPreparedRecipe(options?.prepared ?? null);
+        }
+        setWriteBoardError(null);
+        return;
+      }
+
+      if (options?.prepared) {
+        if (options.prepared) {
+          setPreparedRecipe(options.prepared);
+        }
+        setWriteBoardError(null);
+        return;
+      }
+
+      if (sourceBoard?.boardId === boardId && preparedRecipe) {
+        setWriteBoardError(null);
+        return;
+      }
+
+      try {
+        setPreparingWriteBoard(true);
+        setWriteBoardError(null);
+        const sessionToken = await getSessionToken();
+        const response = await fetch(`/api/monday/boards/${boardId}/prepare`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${sessionToken}`
+          },
+          body: JSON.stringify({
+            recipe: selectedTemplate.recipe
+          })
+        });
+        if (!response.ok) {
+          throw new Error(await response.text());
+        }
+        const data = (await response.json()) as {
+          preparedRecipe: RecipeDefinition;
+          board?: { boardId: string; boardName: string };
+        };
+        setPreparedRecipe(data.preparedRecipe);
+        setWriteBoardName(data.board?.boardName ?? resolvedName);
+        setWriteBoardError(null);
+      } catch (error) {
+        setWriteBoardError((error as Error).message ?? "Failed to prepare board for write-back.");
+      } finally {
+        setPreparingWriteBoard(false);
+      }
+    },
+    [boards, getSessionToken, preparedRecipe, selectedTemplate.recipe, sourceBoard?.boardId]
+  );
+
+  useEffect(() => {
+    if (!context || !mondayClient) {
+      return;
+    }
+    if (boards.length > 0 || isLoadingBoards) {
+      return;
+    }
+    refreshBoards();
+  }, [boards.length, context, isLoadingBoards, mondayClient, refreshBoards]);
 
   useEffect(() => {
     if (!mondayClient) {
@@ -393,6 +474,10 @@ export default function BoardViewClient() {
     setPreparedRecipe(null);
     setSourceBoard(null);
     setBoardsError(null);
+    setWriteBoardId("");
+    setWriteBoardName("");
+    setWriteBoardError(null);
+    setPreparingWriteBoard(false);
     if (dataSource === "file") {
       setSelectedBoardId("");
     } else {
@@ -404,6 +489,9 @@ export default function BoardViewClient() {
     setPreview(null);
     setPreparedRecipe(null);
     setSourceBoard(null);
+    setWriteBoardId("");
+    setWriteBoardName("");
+    setWriteBoardError(null);
   }, [selectedTemplateId]);
 
   useEffect(() => {
@@ -411,8 +499,21 @@ export default function BoardViewClient() {
       setPreview(null);
       setPreparedRecipe(null);
       setSourceBoard(null);
+      setWriteBoardId("");
+      setWriteBoardName("");
+      setWriteBoardError(null);
     }
   }, [selectedBoardId, dataSource]);
+
+  useEffect(() => {
+    if (!writeBoardId) {
+      return;
+    }
+    const matching = boards.find((board) => board.id === writeBoardId);
+    if (matching && matching.name !== writeBoardName) {
+      setWriteBoardName(matching.name);
+    }
+  }, [boards, writeBoardId, writeBoardName]);
 
   useEffect(() => {
     if (!context) {
@@ -448,7 +549,7 @@ export default function BoardViewClient() {
             size="sm"
           >
             <Link href="/settings/monday" target="_blank" rel="noopener noreferrer">
-              Open settings
+              Start
             </Link>
           </Button>
         </div>
@@ -514,6 +615,9 @@ export default function BoardViewClient() {
                     setPreview(null);
                     setPreparedRecipe(null);
                     setSourceBoard(null);
+                    setWriteBoardId("");
+                    setWriteBoardName("");
+                    setWriteBoardError(null);
                     setToast({ message: `Loaded ${file.name}`, variant: "success" });
                   }}
                 />
@@ -597,8 +701,23 @@ export default function BoardViewClient() {
                       }
                       const result = (await response.json()) as PreviewResponse;
                       setPreview(result);
-                      setPreparedRecipe(result.preparedRecipe ?? selectedTemplate.recipe);
                       setSourceBoard(result.sourceBoard ?? null);
+                      const prepared = result.preparedRecipe ?? null;
+                      if (prepared) {
+                        setPreparedRecipe(prepared);
+                      } else {
+                        setPreparedRecipe(selectedTemplate.recipe);
+                      }
+                      if (result.sourceBoard) {
+                        await handleWriteBoardSelect(result.sourceBoard.boardId, {
+                          prepared,
+                          boardName: result.sourceBoard.boardName
+                        });
+                      } else {
+                        setWriteBoardId("");
+                        setWriteBoardName("");
+                      }
+                      setWriteBoardError(null);
                       setToast({
                         message: `Preview ready${result.sourceBoard ? ` for ${result.sourceBoard.boardName}` : ""}`,
                         variant: "success"
@@ -637,11 +756,12 @@ export default function BoardViewClient() {
                     setPreview(result);
                     setPreparedRecipe(selectedTemplate.recipe);
                     setSourceBoard(null);
-                    setToast({ message: "Preview ready", variant: "success" });
-                  } catch (error) {
-                    setToast({ message: (error as Error).message, variant: "error" });
-                  }
-                });
+                    setWriteBoardError(null);
+                setToast({ message: "Preview ready", variant: "success" });
+              } catch (error) {
+                setToast({ message: (error as Error).message, variant: "error" });
+              }
+            });
               }}
             >
               {isPreviewing ? "Processing..." : "Preview recipe"}
@@ -676,16 +796,76 @@ export default function BoardViewClient() {
               <CardDescription>Confirm changes before running write-back.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="write-board-select">Write to board</Label>
+                <div className="flex flex-col gap-2 sm:flex-row">
+                  <Select
+                    id="write-board-select"
+                    value={writeBoardId}
+                    onChange={(event) => handleWriteBoardSelect(event.target.value)}
+                    className="sm:flex-1"
+                    disabled={isPreparingWriteBoard}
+                  >
+                    <option value="">Select a board</option>
+                    {boards.map((board) => (
+                      <option key={board.id} value={board.id}>
+                        {board.name}
+                        {board.workspaceName ? ` — ${board.workspaceName}` : ""}
+                      </option>
+                    ))}
+                  </Select>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      if (!mondayClient) {
+                        setBoardsError("Missing monday context. Open this app inside monday.");
+                        return;
+                      }
+                      refreshBoards();
+                    }}
+                    disabled={isLoadingBoards}
+                  >
+                    {isLoadingBoards ? "Refreshing..." : "Refresh"}
+                  </Button>
+                </div>
+                {isPreparingWriteBoard && (
+                  <p className="text-xs text-muted-foreground">Preparing board mapping…</p>
+                )}
+                {writeBoardError && <p className="text-xs text-destructive">{writeBoardError}</p>}
+                {writeBoardId && writeBoardName && !writeBoardError && !isPreparingWriteBoard && (
+                  <p className="text-xs text-muted-foreground">
+                    Writing to <strong>{writeBoardName}</strong>
+                  </p>
+                )}
+              </div>
+
               {preview && <DiffViewer diff={preview.diff} />}
               <Button
                 variant="secondary"
-                disabled={!preview || !context || isExecuting}
+                disabled={!preview || !context || isExecuting || !writeBoardId || isPreparingWriteBoard}
                 onClick={() => {
                   if (!preview || !context || !selectedTemplate) return;
+                  if (!writeBoardId) {
+                    setToast({ message: "Select a board to write to before running.", variant: "error" });
+                    return;
+                  }
                   startExecute(async () => {
                     try {
                       const sessionToken = await getSessionToken();
-                      const recipeForExecution = preparedRecipe ?? selectedTemplate.recipe;
+                      const baseRecipe = preparedRecipe ?? selectedTemplate.recipe;
+                      const recipeForExecution = JSON.parse(JSON.stringify(baseRecipe)) as RecipeDefinition;
+                      const writeStep = recipeForExecution.steps.find(
+                        (step): step is WriteBackStep => step.type === "write_back"
+                      );
+                      if (!writeStep) {
+                        throw new Error("Recipe missing write-back step.");
+                      }
+                      writeStep.config.boardId = writeBoardId;
+                      if (!writeStep.config.boardId) {
+                        throw new Error("Select a board to write to before running.");
+                      }
                       const response = await fetch("/api/recipes/run/execute", {
                         method: "POST",
                         headers: {
