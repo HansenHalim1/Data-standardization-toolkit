@@ -446,7 +446,7 @@ export async function fetchBoardKeyMap(
     }>;
   }>({
     query: `
-      query BoardKeyValues($boardId: [ID!], $limit: Int!, $columnId: [ID!]) {
+      query BoardKeyValues($boardId: [ID!], $limit: Int!, $columnId: [String!]) {
         boards(ids: $boardId) {
           items_page(limit: $limit) {
             items {
@@ -463,7 +463,7 @@ export async function fetchBoardKeyMap(
     variables: {
       boardId: [boardId],
       limit: itemLimit,
-      columnId: [keyColumnId]
+      columnId: [String(keyColumnId)]
     }
   });
 
