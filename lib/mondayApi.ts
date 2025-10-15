@@ -1,7 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createLogger } from "./logging";
 import { getApiClient } from "./mondayOAuth";
-import type { RecipeRow } from "./recipe-engine";
+import type { MapColumnsStep, RecipeDefinition, RecipeRow, WriteBackStep } from "./recipe-engine";
 import type { Database } from "@/types/supabase";
 
 type Column = {
@@ -33,6 +33,81 @@ export type MondayBoardData = {
 export type MondayColumnMapping = Record<string, string>;
 
 const logger = createLogger({ component: "monday.api" });
+
+type BoardCreationSummary = MondayBoardSummary & { workspaceId?: string | null };
+type MondayBoardKind = "public" | "private" | "share";
+
+const NORMALIZED_NAME_SKIP = new Set(["name", "itemname", "pulse"]);
+
+function normalizeColumnKey(value: string | null | undefined): string {
+  return value ? value.toString().trim().toLowerCase().replace(/[^a-z0-9]/g, "") : "";
+}
+
+function toColumnTitle(field: string): string {
+  const spaced = field
+    .replace(/[_\-]+/g, " ")
+    .replace(/([a-z\d])([A-Z])/g, "$1 $2")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!spaced) {
+    return "Column";
+  }
+  return spaced
+    .split(" ")
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
+}
+
+function inferColumnType(field: string): "text" | "email" | "phone" | "date" {
+  const normalized = field.toLowerCase();
+  if (normalized.includes("email")) {
+    return "email";
+  }
+  if (normalized.includes("phone") || normalized.includes("mobile") || normalized.includes("tel")) {
+    return "phone";
+  }
+  if (normalized.includes("date")) {
+    return "date";
+  }
+  return "text";
+}
+
+function collectRecipeFields(recipe: RecipeDefinition): string[] {
+  const fields = new Set<string>();
+
+  const mapStep = recipe.steps.find(
+    (step): step is MapColumnsStep => step.type === "map_columns"
+  );
+  if (mapStep) {
+    const mapping = mapStep.config.mapping ?? {};
+    for (const target of Object.values(mapping)) {
+      if (target) {
+        fields.add(target);
+      }
+    }
+  }
+
+  const writeStep = recipe.steps.find(
+    (step): step is WriteBackStep => step.type === "write_back"
+  );
+  if (writeStep) {
+    if (writeStep.config.columnMapping) {
+      for (const target of Object.keys(writeStep.config.columnMapping)) {
+        if (target) {
+          fields.add(target);
+        }
+      }
+    }
+    if (writeStep.config.keyColumn) {
+      fields.add(writeStep.config.keyColumn);
+    }
+    if (writeStep.config.itemNameField) {
+      fields.add(writeStep.config.itemNameField);
+    }
+  }
+
+  return Array.from(fields);
+}
 
 export async function resolveOAuthToken(
   supabase: SupabaseClient<Database>,
@@ -202,6 +277,150 @@ export function boardItemsToRows(board: MondayBoardData): RecipeRow[] {
     }
     return row;
   });
+}
+
+export async function createBoardForRecipe({
+  accessToken,
+  recipe,
+  boardName,
+  boardKind = "private",
+  workspaceId
+}: {
+  accessToken: string;
+  recipe: RecipeDefinition;
+  boardName: string;
+  boardKind?: MondayBoardKind;
+  workspaceId?: number;
+}): Promise<{ boardData: MondayBoardData; summary: BoardCreationSummary }> {
+  const client = getApiClient({ accessToken });
+  const variables: {
+    boardName: string;
+    boardKind: MondayBoardKind;
+    workspaceId?: number | null;
+  } = {
+    boardName,
+    boardKind,
+    workspaceId: typeof workspaceId === "number" && Number.isFinite(workspaceId) ? workspaceId : null
+  };
+
+  const created = await client<{
+    create_board: {
+      id: string;
+      name: string;
+      board_kind?: string | null;
+      workspace?: { id?: string | null; name?: string | null } | null;
+    };
+  }>({
+    query: `
+      mutation CreateBoard($boardName: String!, $boardKind: BoardKind!, $workspaceId: Int) {
+        create_board(board_name: $boardName, board_kind: $boardKind, workspace_id: $workspaceId) {
+          id
+          name
+          board_kind
+          workspace {
+            id
+            name
+          }
+        }
+      }
+    `,
+    variables
+  });
+
+  const board = created.create_board;
+  if (!board?.id) {
+    throw new Error("Failed to create monday board.");
+  }
+
+  logger.info("Created monday board", {
+    boardId: board.id,
+    boardKind,
+    workspaceId: variables.workspaceId ?? undefined
+  });
+
+  let boardData = await fetchBoardData(accessToken, board.id);
+
+  const desiredFields = collectRecipeFields(recipe);
+  const existingColumns = new Set(
+    boardData.columns
+      .map((column) => normalizeColumnKey(column.title))
+      .filter((value) => value.length > 0)
+  );
+
+  const createdColumns: Column[] = [];
+  for (const field of desiredFields) {
+    const normalizedField = normalizeColumnKey(field);
+    if (!normalizedField || NORMALIZED_NAME_SKIP.has(normalizedField)) {
+      continue;
+    }
+    if (existingColumns.has(normalizedField)) {
+      continue;
+    }
+
+    const title = toColumnTitle(field);
+    const columnType = inferColumnType(field);
+
+    try {
+      const result = await client<{
+        create_column: { id: string; title?: string | null; type?: string | null };
+      }>({
+        query: `
+          mutation CreateColumn($boardId: ID!, $title: String!, $columnType: ColumnType!) {
+            create_column(board_id: $boardId, title: $title, column_type: $columnType) {
+              id
+              title
+              type
+            }
+          }
+        `,
+        variables: {
+          boardId: board.id,
+          title,
+          columnType
+        }
+      });
+
+      const createdColumn = result.create_column;
+      if (createdColumn?.id) {
+        const normalizedCreated = normalizeColumnKey(createdColumn.title ?? title);
+        if (normalizedCreated) {
+          existingColumns.add(normalizedCreated);
+        }
+        createdColumns.push({
+          id: createdColumn.id,
+          title: createdColumn.title ?? title,
+          type: createdColumn.type ?? columnType
+        });
+        logger.debug("Created monday column", {
+          boardId: board.id,
+          columnId: createdColumn.id,
+          title: createdColumn.title ?? title,
+          type: createdColumn.type ?? columnType
+        });
+      }
+    } catch (error) {
+      logger.warn("Failed to create monday column", {
+        boardId: board.id,
+        field,
+        error: (error as Error).message
+      });
+    }
+  }
+
+  if (createdColumns.length > 0) {
+    boardData = await fetchBoardData(accessToken, board.id);
+  }
+
+  return {
+    boardData,
+    summary: {
+      id: board.id,
+      name: board.name,
+      kind: board.board_kind ?? null,
+      workspaceName: board.workspace?.name ?? null,
+      workspaceId: board.workspace?.id ?? null
+    }
+  };
 }
 
 export async function fetchBoardKeyMap(

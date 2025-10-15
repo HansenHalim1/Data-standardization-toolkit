@@ -13,6 +13,7 @@ import { UsageBadge } from "@/components/UsageBadge";
 import { Toast } from "@/components/Toast";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
 
@@ -260,11 +261,13 @@ export default function BoardViewClient() {
   const [writeBoardName, setWriteBoardName] = useState<string>("");
   const [writeBoardError, setWriteBoardError] = useState<string | null>(null);
   const [isPreparingWriteBoard, setPreparingWriteBoard] = useState(false);
+  const [newBoardName, setNewBoardName] = useState<string>("");
+  const [isCreatingBoard, setIsCreatingBoard] = useState(false);
 
   const applyPreparedRecipe = useCallback((recipe: RecipeDefinition | null) => {
     setPreparedRecipe(recipe);
     if (!recipe) {
-      
+      setWriteBoardError(null);
       return;
     }
     const writeStep = recipe.steps.find((step): step is WriteBackStep => step.type === "write_back");
@@ -274,7 +277,7 @@ export default function BoardViewClient() {
         "No matching columns found between the template and the selected board. Rename the board columns or adjust the template mapping."
       );
     } else {
-      
+      setWriteBoardError(null);
     }
   }, []);
   const mondayClient = useMemo(() => {
@@ -338,6 +341,7 @@ export default function BoardViewClient() {
 
   const handleWriteBoardSelect = useCallback(
     async (boardId: string, options?: { prepared?: RecipeDefinition | null; boardName?: string }) => {
+      setWriteBoardError(null);
       setWriteBoardId(boardId);
       const board = boards.find((entry) => entry.id === boardId);
       const resolvedName = options?.boardName ?? board?.name ?? "";
@@ -389,6 +393,81 @@ export default function BoardViewClient() {
     },
     [applyPreparedRecipe, boards, getSessionToken, preparedRecipe, selectedTemplate.recipe, sourceBoard?.boardId]
   );
+
+  const handleCreateBoard = useCallback(async () => {
+    if (!selectedTemplate) {
+      setWriteBoardError("Select a template before creating a board.");
+      return;
+    }
+    const trimmedName = newBoardName.trim();
+    if (!trimmedName) {
+      setWriteBoardError("Enter a name for the new board.");
+      return;
+    }
+
+    try {
+      setIsCreatingBoard(true);
+      setBoardsError(null);
+      setWriteBoardError(null);
+      const sessionToken = await getSessionToken();
+      const recipeForBoard = preparedRecipe ?? selectedTemplate.recipe;
+      const response = await fetch("/api/monday/boards", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${sessionToken}`
+        },
+        body: JSON.stringify({
+          name: trimmedName,
+          recipe: recipeForBoard
+        })
+      });
+      if (!response.ok) {
+        throw new Error(await response.text());
+      }
+      const result = (await response.json()) as {
+        board: {
+          boardId: string;
+          boardName: string;
+          workspaceName?: string | null;
+          kind?: string | null;
+        };
+        preparedRecipe: RecipeDefinition;
+      };
+      setBoards((current) => {
+        const filtered = current.filter((entry) => entry.id !== result.board.boardId);
+        const next = [
+          ...filtered,
+          {
+            id: result.board.boardId,
+            name: result.board.boardName,
+            workspaceName: result.board.workspaceName ?? null,
+            kind: result.board.kind ?? null
+          }
+        ];
+        return next.sort((a, b) => a.name.localeCompare(b.name));
+      });
+      await handleWriteBoardSelect(result.board.boardId, {
+        prepared: result.preparedRecipe,
+        boardName: result.board.boardName
+      });
+      setNewBoardName("");
+      setToast({
+        message: `Created board "${result.board.boardName}".`,
+        variant: "success"
+      });
+    } catch (error) {
+      setWriteBoardError((error as Error).message ?? "Failed to create board.");
+    } finally {
+      setIsCreatingBoard(false);
+    }
+  }, [
+    getSessionToken,
+    handleWriteBoardSelect,
+    newBoardName,
+    preparedRecipe,
+    selectedTemplate
+  ]);
 
   useEffect(() => {
     if (!context || !mondayClient) {
@@ -486,6 +565,7 @@ export default function BoardViewClient() {
     setWriteBoardId("");
     setWriteBoardName("");
     setPreparingWriteBoard(false);
+    setNewBoardName("");
     if (dataSource === "file") {
       setSelectedBoardId("");
     } else {
@@ -499,6 +579,7 @@ export default function BoardViewClient() {
     setSourceBoard(null);
     setWriteBoardId("");
     setWriteBoardName("");
+    setNewBoardName("");
   }, [applyPreparedRecipe, selectedTemplateId]);
 
   useEffect(() => {
@@ -829,6 +910,27 @@ export default function BoardViewClient() {
                     disabled={isLoadingBoards}
                   >
                     {isLoadingBoards ? "Refreshing..." : "Refresh"}
+                  </Button>
+                </div>
+                <div className="flex flex-col gap-2 sm:flex-row">
+                  <Input
+                    value={newBoardName}
+                    onChange={(event) => setNewBoardName(event.target.value)}
+                    placeholder="New board name"
+                    className="sm:flex-1"
+                    disabled={isCreatingBoard || isPreparingWriteBoard}
+                  />
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={handleCreateBoard}
+                    disabled={
+                      isCreatingBoard ||
+                      isPreparingWriteBoard ||
+                      !newBoardName.trim()
+                    }
+                  >
+                    {isCreatingBoard ? "Creating..." : "Create board"}
                   </Button>
                 </div>
                 {isPreparingWriteBoard && (
