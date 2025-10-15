@@ -89,8 +89,28 @@ describe("verifyMondayJwt", () => {
       accountId: "123",
       userId: "456",
       shortLivedToken: undefined
-    });
   });
+});
+
+describe("verifyMondaySessionToken", () => {
+  it("extracts ids from dat payload", async () => {
+    const { verifyMondaySessionToken } = await import("@/lib/security");
+    const token = jwt.sign(
+      {
+        dat: {
+          account_id: 999,
+          user_id: 888
+        }
+      },
+      baseEnv.MONDAY_CLIENT_SECRET,
+      { expiresIn: "5m" }
+    );
+
+    const claims = verifyMondaySessionToken(token);
+    expect(claims.accountId).toBe(999);
+    expect(claims.userId).toBe(888);
+  });
+});
 
   it("accepts raw jwt authorization header without scheme", async () => {
     const { verifyMondayJwt } = await import("@/lib/mondayJwt");

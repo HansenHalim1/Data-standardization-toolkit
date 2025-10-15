@@ -66,6 +66,7 @@ export function verifyMondaySessionToken(token: string): MondaySessionClaims {
     const contextObj = rawClaims.context as Record<string, unknown> | undefined;
     const contextAccount = contextObj?.account as Record<string, unknown> | undefined;
     const contextUser = contextObj?.user as Record<string, unknown> | undefined;
+    const dat = rawClaims.dat as Record<string, unknown> | undefined;
 
     const extractId = (value: unknown): string | number | undefined => {
       if (typeof value === "string" && value.trim().length > 0) {
@@ -85,14 +86,16 @@ export function verifyMondaySessionToken(token: string): MondaySessionClaims {
       extractId(accountObj?.slug) ??
       extractId(contextAccount?.id) ??
       extractId(contextAccount?.uuid) ??
-      extractId(contextAccount?.slug);
+      extractId(contextAccount?.slug) ??
+      extractId(dat?.account_id);
     const userId =
       extractId(rawClaims.userId) ??
       extractId(rawClaims.user_id) ??
       extractId(userObj?.id) ??
       extractId(userObj?.uuid) ??
       extractId(contextUser?.id) ??
-      extractId(contextUser?.uuid);
+      extractId(contextUser?.uuid) ??
+      extractId(dat?.user_id);
 
     if (!accountId || !userId) {
       throw new UnauthorizedError("Session token missing required claims");
