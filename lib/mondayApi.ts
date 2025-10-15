@@ -1,5 +1,3 @@
-import { promises as fs } from "fs";
-import path from "path";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createLogger } from "./logging";
 import { getApiClient } from "./mondayOAuth";
@@ -42,8 +40,6 @@ type MondayBoardKind = "public" | "private" | "share";
 export type BoardSchema = Record<string, string>;
 
 const NORMALIZED_NAME_SKIP = new Set(["name", "itemname", "pulse"]);
-
-const PAYLOAD_LOG_FILE = path.join(process.cwd(), "monday_payload.log");
 
 function normalizeColumnKey(value: string | null | undefined): string {
   return value ? value.toString().trim().toLowerCase().replace(/[^a-z0-9]/g, "") : "";
@@ -166,19 +162,7 @@ function sleep(ms: number): Promise<void> {
 
 async function logMondayPayload(entry: { query: string; variables: unknown }) {
   const timestamp = new Date().toISOString();
-  const payload = {
-    timestamp,
-    ...entry
-  };
-  const serialized = `${JSON.stringify(payload)}\n`;
-
-  try {
-    await fs.appendFile(PAYLOAD_LOG_FILE, serialized, { encoding: "utf8" });
-  } catch (error) {
-    logger.warn("Failed to write monday payload log", {
-      error: error instanceof Error ? error.message : String(error)
-    });
-  }
+  logger.debug("Monday mutation payload", { timestamp, ...entry });
 }
 
 export async function resolveOAuthToken(
