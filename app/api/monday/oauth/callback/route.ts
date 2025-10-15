@@ -147,7 +147,7 @@ export async function GET(request: Request) {
     buildRedirectUrl(statePayload.returnTo ?? "/dashboard", accountId, userId, scopes, accountSlug),
     { status: 302 }
   );
-  response.cookies.delete(STATE_COOKIE_NAME, { path: "/api/monday/oauth" });
+  clearStateCookie(response);
   return response;
 }
 
@@ -231,7 +231,7 @@ function renderHtml(status: number, content: string) {
       }
     }
   );
-  response.cookies.delete(STATE_COOKIE_NAME, { path: "/api/monday/oauth" });
+  clearStateCookie(response);
   return response;
 }
 
@@ -252,4 +252,17 @@ function getDefaultErrorDescription(code: string): string {
     default:
       return "An unknown error occurred during monday.com authorization.";
   }
+}
+
+function clearStateCookie(response: NextResponse) {
+  const configuration = env();
+  response.cookies.set({
+    name: STATE_COOKIE_NAME,
+    value: "",
+    httpOnly: true,
+    sameSite: "lax",
+    secure: configuration.nodeEnv === "production",
+    path: "/api/monday/oauth",
+    expires: new Date(0)
+  });
 }
