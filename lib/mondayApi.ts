@@ -156,6 +156,10 @@ function formatColumnValue(rawValue: unknown, columnType?: string): unknown | nu
   }
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export async function resolveOAuthToken(
   supabase: SupabaseClient<Database>,
   accountId: string,
@@ -300,6 +304,144 @@ export async function writeBackToMonday({
   });
 
   return result.change_multiple_column_values ?? null;
+}
+
+type MondayBatchRow = {
+  itemId: string;
+  data: Record<string, unknown>;
+};
+
+type MondayBatchResult =
+  | { itemId: string; ok: true; res: { id: string } | null; attempts: number }
+  | { itemId: string; ok: false; error: string; attempts: number };
+
+export async function writeBackBatchSafe({
+  accessToken,
+  boardId,
+  rows,
+  batchSize = 5,
+  delayMs = 600,
+  maxRetries = 3
+}: {
+  accessToken: string;
+  boardId: string;
+  rows: MondayBatchRow[];
+  batchSize?: number;
+  delayMs?: number;
+  maxRetries?: number;
+}): Promise<{
+  totalSuccess: number;
+  totalFailed: number;
+  results: MondayBatchResult[];
+}> {
+  if (batchSize <= 0) {
+    throw new Error("batchSize must be greater than zero.");
+  }
+
+  const results: MondayBatchResult[] = [];
+  let totalSuccess = 0;
+  let totalFailed = 0;
+
+  const totalBatches = Math.ceil(rows.length / batchSize) || 1;
+
+  for (let i = 0; i < rows.length; i += batchSize) {
+    const batchNumber = Math.floor(i / batchSize) + 1;
+    const slice = rows.slice(i, i + batchSize);
+    logger.info("Processing monday write-back batch", {
+      boardId,
+      batchNumber,
+      totalBatches,
+      batchSize: slice.length
+    });
+
+    const batchResults = await Promise.all(
+      slice.map(async (row): Promise<MondayBatchResult> => {
+        let attempt = 0;
+        while (attempt <= maxRetries) {
+          try {
+            const res = await writeBackToMonday({
+              accessToken,
+              boardId,
+              itemId: row.itemId,
+              data: row.data
+            });
+            return { itemId: row.itemId, ok: true, res, attempts: attempt + 1 };
+          } catch (error) {
+            attempt += 1;
+            const message =
+              error instanceof Error ? error.message : typeof error === "string" ? error : "Unknown error";
+            const normalized = message.toLowerCase();
+            const isRateLimit = normalized.includes("rate") || normalized.includes("429");
+            const isServerError =
+              normalized.includes("500") ||
+              normalized.includes("502") ||
+              normalized.includes("503") ||
+              normalized.includes("504");
+
+            if ((isRateLimit || isServerError) && attempt <= maxRetries) {
+              const wait =
+                delayMs * Math.pow(2, attempt - 1) + Math.random() * 250;
+              logger.warn("Retrying monday write-back after transient failure", {
+                boardId,
+                itemId: row.itemId,
+                attempt,
+                maxRetries,
+                waitMs: Math.round(wait),
+                message
+              });
+              await sleep(wait);
+              continue;
+            }
+
+            logger.error("Failed monday write-back", {
+              boardId,
+              itemId: row.itemId,
+              attempts: attempt,
+              error: message
+            });
+            return { itemId: row.itemId, ok: false, error: message, attempts: attempt };
+          }
+        }
+
+        return {
+          itemId: row.itemId,
+          ok: false,
+          error: "Exceeded retry attempts for monday write-back.",
+          attempts: attempt
+        };
+      })
+    );
+
+    for (const result of batchResults) {
+      if (result.ok) {
+        totalSuccess += 1;
+      } else {
+        totalFailed += 1;
+      }
+      results.push(result);
+    }
+
+    const failedThisBatch = batchResults.filter((result) => !result.ok).length;
+    if (failedThisBatch > 0) {
+      logger.warn("Batch completed with monday write-back failures", {
+        boardId,
+        batchNumber,
+        failed: failedThisBatch
+      });
+    }
+
+    if (i + batchSize < rows.length) {
+      await sleep(delayMs);
+    }
+  }
+
+  logger.info("Completed monday write-back batches", {
+    boardId,
+    totalSuccess,
+    totalFailed
+  });
+
+  return { totalSuccess, totalFailed, results };
 }
 
 export async function fetchBoards(accessToken: string, limit = 50): Promise<MondayBoardSummary[]> {
