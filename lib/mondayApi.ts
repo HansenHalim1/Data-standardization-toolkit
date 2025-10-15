@@ -853,10 +853,22 @@ export async function upsertRowsToBoard({
           payload: { query, variables }
         })
       );
-      await client({
-        query,
-        variables
-      });
+      try {
+        await client({
+          query,
+          variables
+        });
+      } catch (error) {
+        const status = (error as { response?: { status?: number } })?.response?.status ?? "unknown";
+        const message = error instanceof Error ? error.message : String(error);
+        logger.error("monday.com API request failed (update)", {
+          boardId,
+          itemId: existingItemId,
+          status,
+          message
+        });
+        throw error;
+      }
       logger.debug("Updated monday item", { boardId, itemId: existingItemId });
       continue;
     }
@@ -881,12 +893,24 @@ export async function upsertRowsToBoard({
         payload: { query: createQuery, variables: createVariables }
       })
     );
-    const createResult = await client<{
-      create_item: { id: string };
-    }>({
-      query: createQuery,
-      variables: createVariables
-    });
+    let createResult: { create_item: { id: string } } | null = null;
+    try {
+      createResult = await client<{
+        create_item: { id: string };
+      }>({
+        query: createQuery,
+        variables: createVariables
+      });
+    } catch (error) {
+      const status = (error as { response?: { status?: number } })?.response?.status ?? "unknown";
+      const message = error instanceof Error ? error.message : String(error);
+      logger.error("monday.com API request failed (create)", {
+        boardId,
+        status,
+        message
+      });
+      throw error;
+    }
 
     if (normalizedKey && createResult.create_item?.id) {
       keyMap.set(normalizedKey, createResult.create_item.id);
