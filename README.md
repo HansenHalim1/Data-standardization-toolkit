@@ -32,14 +32,16 @@ tests/              # Vitest unit + Playwright e2e suites
 ## Environment Variables
 
 ```
-NEXT_PUBLIC_APP_URL=http://localhost:3000
+APP_BASE_URL=http://localhost:3000
+NEXT_PUBLIC_MONDAY_REDIRECT_URI=http://localhost:3000/api/monday/oauth/callback
 SUPABASE_URL=<your-supabase-url>
 SUPABASE_ANON_KEY=<anon-key>
 SUPABASE_SERVICE_ROLE_KEY=<service-role-key>
 MONDAY_CLIENT_ID=<monday-app-client-id>
 MONDAY_CLIENT_SECRET=<monday-client-secret>
-MONDAY_REDIRECT_URI=http://localhost:3000/api/monday/oauth
-MONDAY_APP_SIGNING_SECRET=<monday-signing-secret>
+MONDAY_SIGNING_SECRET=<monday-signing-secret>
+MONDAY_DEFAULT_SCOPES="boards:read boards:write users:read me:read"
+MONDAY_FORCE_INSTALL_IF_NEEDED=false
 ```
 
 For local development without Supabase, set `ENABLE_SUPABASE_STUB=1`. The stub seeds a demo tenant (`demo-account`) using the pro plan, enabling fuzzy dedupe for e2e tests.
@@ -62,17 +64,15 @@ pnpm install
 pnpm dev
 ```
 
-Open `http://localhost:3000` for the marketing site. To exercise the embedded board app, load `http://localhost:3000/monday/view` inside the monday.com board view (e.g., via the monday CLI preview or by installing the app on a test board). The iframe uses `monday-sdk-js` to fetch a fresh `sessionToken` for every API request and sends it in `Authorization: Bearer <token>` headers—there is no URL token support.
+Open `http://localhost:3000` for the marketing site. To exercise the embedded board app, load `http://localhost:3000/monday/view` inside the monday.com board view (e.g., via the monday CLI preview or by installing the app on a test board). The iframe uses `monday-sdk-js` to fetch a fresh `sessionToken` for every API request and sends it in `Authorization: Bearer <token>` headers -- there is no URL token support.
 
 ## Testing
 
-- `pnpm lint` – ESLint flat config with Next + TypeScript rules
-- `pnpm typecheck` – strict TypeScript compilation
-- `pnpm test:unit` – Vitest coverage for recipe engine steps
-- `pnpm test:e2e` – Playwright scenario covering CSV preview → execute flow (stub Supabase + monday token)
-- `pnpm test` – Runs unit + e2e suites
-
-CI (`.github/workflows/ci.yml`) mirrors the above, ensuring lint/typecheck/unit/e2e on every PR.
+- pnpm lint - ESLint flat config with Next + TypeScript rules
+- pnpm typecheck - strict TypeScript compilation
+- pnpm test:unit - Vitest coverage for recipe engine steps and monday OAuth utilities
+- pnpm test:e2e - Playwright scenario covering CSV preview + execute flow (stub Supabase + monday token)
+- pnpm test - Runs unit + e2e suites
 
 ## Usage Metering & Plan Gates
 
@@ -84,7 +84,7 @@ CI (`.github/workflows/ci.yml`) mirrors the above, ensuring lint/typecheck/unit/
 
 - `lib/logging.ts` provides structured JSON logs with request IDs/tenant info and PII redaction.
 - `/api/health` outputs `{ ok, time, version }` for uptime checks.
-- Monday board view session tokens are verified with `MONDAY_CLIENT_SECRET` (`verifyMondaySessionToken` in `lib/security.ts`); webhook payloads continue to use HMAC signatures.
+- Monday board view session tokens are verified with `MONDAY_CLIENT_SECRET` (`verifyMondaySessionToken` in `lib/security.ts`); integration JWTs and webhooks use `MONDAY_SIGNING_SECRET`.
 - Service role key usage is isolated to server-only `getServiceSupabase()` (no client exposure).
 
 ## Deployment
@@ -108,3 +108,8 @@ Deploy to Vercel with the supplied `vercel.json`. Ensure the production environm
 ```
 
 Import or edit recipes via the dashboard (`/recipes/[id]`) using the JSON editor, or bootstrap new ones through the `POST /api/recipes/create` endpoint.
+
+
+
+
+

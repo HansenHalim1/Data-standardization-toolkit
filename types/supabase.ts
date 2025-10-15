@@ -58,6 +58,35 @@ export type Database = {
           updated_at?: string | null;
         };
       };
+      monday_oauth_tokens: {
+        Row: {
+          id: number;
+          account_id: number;
+          user_id: number;
+          access_token: string;
+          scopes: string[];
+          created_at: string | null;
+          updated_at: string | null;
+        };
+        Insert: {
+          id?: number;
+          account_id: number;
+          user_id: number;
+          access_token: string;
+          scopes: string[];
+          created_at?: string | null;
+          updated_at?: string | null;
+        };
+        Update: {
+          id?: number;
+          account_id?: number;
+          user_id?: number;
+          access_token?: string;
+          scopes?: string[];
+          created_at?: string | null;
+          updated_at?: string | null;
+        };
+      };
       recipes: {
         Row: {
           id: string;

@@ -1,6 +1,7 @@
 import { createHmac, timingSafeEqual } from "crypto";
 import jwt, { type JwtPayload } from "jsonwebtoken";
 import { UnauthorizedError } from "./errors";
+import { env } from "./env";
 
 export function signPayload(payload: string, secret: string) {
   return createHmac("sha256", secret).update(payload, "utf8").digest("base64");
@@ -33,11 +34,7 @@ export function assertWebhookSignature({
 }
 
 function assertMondayClientSecret(): string {
-  const secret = process.env.MONDAY_CLIENT_SECRET;
-  if (!secret) {
-    throw new UnauthorizedError("Missing monday client secret configuration");
-  }
-  return secret;
+  return env().monday.clientSecret;
 }
 
 export type MondaySessionClaims = JwtPayload & {

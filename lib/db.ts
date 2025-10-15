@@ -1,5 +1,6 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { Database } from "@/types/supabase";
+import { env } from "./env";
 
 type TableName = keyof Database["public"]["Tables"];
 
@@ -10,6 +11,7 @@ type MemoryUpdate<K extends TableName> = Database["public"]["Tables"][K]["Update
 const memoryStore: { [K in TableName]: MemoryRow<K>[] } = {
   tenants: [],
   entitlements: [],
+  monday_oauth_tokens: [],
   recipes: [],
   runs: [],
   usage_monthly: [],
@@ -164,24 +166,17 @@ function createMemoryClient(): SupabaseClient<Database> {
 
 let serviceClient: SupabaseClient<Database> | null = null;
 
-function assertEnv(name: string) {
-  const value = process.env[name];
-  if (!value) {
-    throw new Error(`Missing required environment variable: ${name}`);
-  }
-  return value;
-}
-
 export function getServiceSupabase(): SupabaseClient<Database> {
   if (serviceClient) {
     return serviceClient;
   }
 
-  const url = process.env.SUPABASE_URL;
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const appEnv = env();
+  const url = appEnv.supabase.url;
+  const key = appEnv.supabase.serviceRoleKey;
 
   if (!url || !key) {
-    if (process.env.NODE_ENV === "test" || process.env.ENABLE_SUPABASE_STUB === "1") {
+    if (appEnv.nodeEnv === "test" || appEnv.supabase.enableStub) {
       serviceClient = createMemoryClient();
       seedMemoryStore();
       return serviceClient;
@@ -205,8 +200,9 @@ export function getServiceSupabase(): SupabaseClient<Database> {
 }
 
 export function getAnonSupabase(): SupabaseClient<Database> {
-  const url = assertEnv("SUPABASE_URL");
-  const key = assertEnv("SUPABASE_ANON_KEY");
+  const appEnv = env();
+  const url = appEnv.supabase.url;
+  const key = appEnv.supabase.anonKey;
 
   return createClient<Database>(url, key, {
     auth: {

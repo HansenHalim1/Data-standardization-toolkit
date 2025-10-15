@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { assertWebhookSignature } from "@/lib/security";
 import { getServiceSupabase } from "@/lib/db";
 import { createLogger } from "@/lib/logging";
+import { env } from "@/lib/env";
 import { flagsForPlan } from "@/lib/entitlements";
 import type { Database, Json } from "@/types/supabase";
 
@@ -14,10 +15,7 @@ export const runtime = "nodejs";
 export async function POST(request: Request) {
   const logger = createLogger({ component: "webhooks.monday" });
   const signature = request.headers.get("x-monday-signature");
-  const secret = process.env.MONDAY_APP_SIGNING_SECRET;
-  if (!secret) {
-    return new NextResponse("Signing secret not configured", { status: 500 });
-  }
+  const secret = env().monday.signingSecret;
 
   const rawBody = await request.text();
   try {
