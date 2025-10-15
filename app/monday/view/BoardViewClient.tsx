@@ -261,6 +261,22 @@ export default function BoardViewClient() {
   const [writeBoardError, setWriteBoardError] = useState<string | null>(null);
   const [isPreparingWriteBoard, setPreparingWriteBoard] = useState(false);
 
+  const applyPreparedRecipe = useCallback((recipe: RecipeDefinition | null) => {
+    setPreparedRecipe(recipe);
+    if (!recipe) {
+      
+      return;
+    }
+    const writeStep = recipe.steps.find((step): step is WriteBackStep => step.type === "write_back");
+    const mapping = writeStep?.config?.columnMapping;
+    if (!mapping || Object.keys(mapping).length === 0) {
+      setWriteBoardError(
+        "No matching columns found between the template and the selected board. Rename the board columns or adjust the template mapping."
+      );
+    } else {
+      
+    }
+  }, []);
   const mondayClient = useMemo(() => {
     if (typeof window === "undefined") {
       return null;
@@ -328,29 +344,23 @@ export default function BoardViewClient() {
       setWriteBoardName(resolvedName);
 
       if (!boardId) {
-        if (options?.prepared ?? null) {
-          setPreparedRecipe(options?.prepared ?? null);
-        }
-        setWriteBoardError(null);
+        applyPreparedRecipe(options?.prepared ?? null);
         return;
       }
 
       if (options?.prepared) {
-        if (options.prepared) {
-          setPreparedRecipe(options.prepared);
-        }
-        setWriteBoardError(null);
+        applyPreparedRecipe(options.prepared);
         return;
       }
 
       if (sourceBoard?.boardId === boardId && preparedRecipe) {
-        setWriteBoardError(null);
+        applyPreparedRecipe(preparedRecipe);
         return;
       }
 
       try {
         setPreparingWriteBoard(true);
-        setWriteBoardError(null);
+        
         const sessionToken = await getSessionToken();
         const response = await fetch(`/api/monday/boards/${boardId}/prepare`, {
           method: "POST",
@@ -369,16 +379,15 @@ export default function BoardViewClient() {
           preparedRecipe: RecipeDefinition;
           board?: { boardId: string; boardName: string };
         };
-        setPreparedRecipe(data.preparedRecipe);
+        applyPreparedRecipe(data.preparedRecipe);
         setWriteBoardName(data.board?.boardName ?? resolvedName);
-        setWriteBoardError(null);
       } catch (error) {
         setWriteBoardError((error as Error).message ?? "Failed to prepare board for write-back.");
       } finally {
         setPreparingWriteBoard(false);
       }
     },
-    [boards, getSessionToken, preparedRecipe, selectedTemplate.recipe, sourceBoard?.boardId]
+    [applyPreparedRecipe, boards, getSessionToken, preparedRecipe, selectedTemplate.recipe, sourceBoard?.boardId]
   );
 
   useEffect(() => {
@@ -471,39 +480,36 @@ export default function BoardViewClient() {
 
   useEffect(() => {
     setPreview(null);
-    setPreparedRecipe(null);
+    applyPreparedRecipe(null);
     setSourceBoard(null);
     setBoardsError(null);
     setWriteBoardId("");
     setWriteBoardName("");
-    setWriteBoardError(null);
     setPreparingWriteBoard(false);
     if (dataSource === "file") {
       setSelectedBoardId("");
     } else {
       setUploadedFile(null);
     }
-  }, [dataSource]);
+  }, [applyPreparedRecipe, dataSource]);
 
   useEffect(() => {
     setPreview(null);
-    setPreparedRecipe(null);
+    applyPreparedRecipe(null);
     setSourceBoard(null);
     setWriteBoardId("");
     setWriteBoardName("");
-    setWriteBoardError(null);
-  }, [selectedTemplateId]);
+  }, [applyPreparedRecipe, selectedTemplateId]);
 
   useEffect(() => {
     if (dataSource === "board") {
       setPreview(null);
-      setPreparedRecipe(null);
+      applyPreparedRecipe(null);
       setSourceBoard(null);
       setWriteBoardId("");
       setWriteBoardName("");
-      setWriteBoardError(null);
     }
-  }, [selectedBoardId, dataSource]);
+  }, [applyPreparedRecipe, selectedBoardId, dataSource]);
 
   useEffect(() => {
     if (!writeBoardId) {
@@ -613,11 +619,11 @@ export default function BoardViewClient() {
                     setDataSource("file");
                     setUploadedFile(file);
                     setPreview(null);
-                    setPreparedRecipe(null);
+                    applyPreparedRecipe(null);
                     setSourceBoard(null);
                     setWriteBoardId("");
                     setWriteBoardName("");
-                    setWriteBoardError(null);
+                    
                     setToast({ message: `Loaded ${file.name}`, variant: "success" });
                   }}
                 />
@@ -702,22 +708,17 @@ export default function BoardViewClient() {
                       const result = (await response.json()) as PreviewResponse;
                       setPreview(result);
                       setSourceBoard(result.sourceBoard ?? null);
-                      const prepared = result.preparedRecipe ?? null;
-                      if (prepared) {
-                        setPreparedRecipe(prepared);
-                      } else {
-                        setPreparedRecipe(selectedTemplate.recipe);
-                      }
+                      const prepared = result.preparedRecipe ?? (result.sourceBoard ? null : selectedTemplate.recipe);
                       if (result.sourceBoard) {
                         await handleWriteBoardSelect(result.sourceBoard.boardId, {
                           prepared,
                           boardName: result.sourceBoard.boardName
                         });
                       } else {
+                        applyPreparedRecipe(prepared ?? null);
                         setWriteBoardId("");
                         setWriteBoardName("");
                       }
-                      setWriteBoardError(null);
                       setToast({
                         message: `Preview ready${result.sourceBoard ? ` for ${result.sourceBoard.boardName}` : ""}`,
                         variant: "success"
@@ -754,9 +755,9 @@ export default function BoardViewClient() {
                     }
                     const result = (await response.json()) as PreviewResponse;
                     setPreview(result);
-                    setPreparedRecipe(selectedTemplate.recipe);
+                    applyPreparedRecipe(selectedTemplate.recipe);
                     setSourceBoard(null);
-                    setWriteBoardError(null);
+                    
                 setToast({ message: "Preview ready", variant: "success" });
               } catch (error) {
                 setToast({ message: (error as Error).message, variant: "error" });

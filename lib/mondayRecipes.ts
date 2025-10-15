@@ -9,14 +9,22 @@ export function prepareRecipeForBoard(recipe: RecipeDefinition, board: MondayBoa
     return cloned;
   }
 
+  const normalize = (value: string | null | undefined) =>
+    value ? value.toString().trim().toLowerCase().replace(/[^a-z0-9]/g, "") : "";
+
   const columnsByTitle = new Map(
-    board.columns.map((column) => [column.title.trim().toLowerCase(), column.id])
+    board.columns.map((column) => [normalize(column.title), column.id])
   );
 
   const columnMapping: Record<string, string> = {};
   if (mapStep) {
     for (const [source, target] of Object.entries(mapStep.config.mapping)) {
-      const columnId = columnsByTitle.get(source.trim().toLowerCase());
+      const normalizedSource = normalize(source);
+      let columnId = columnsByTitle.get(normalizedSource);
+      if (!columnId) {
+        const normalizedTarget = normalize(target.replace(/_/g, " "));
+        columnId = columnsByTitle.get(normalizedTarget);
+      }
       if (columnId) {
         columnMapping[target] = columnId;
       }
@@ -26,12 +34,16 @@ export function prepareRecipeForBoard(recipe: RecipeDefinition, board: MondayBoa
   writeStep.config.boardId = board.boardId;
   if (Object.keys(columnMapping).length > 0) {
     writeStep.config.columnMapping = columnMapping;
+  } else {
+    delete writeStep.config.columnMapping;
   }
 
   if (writeStep.config.keyColumn) {
     const keyColumnId = columnMapping[writeStep.config.keyColumn];
     if (keyColumnId) {
       writeStep.config.keyColumnId = keyColumnId;
+    } else {
+      delete writeStep.config.keyColumnId;
     }
   }
 
