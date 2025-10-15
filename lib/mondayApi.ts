@@ -37,6 +37,8 @@ const logger = createLogger({ component: "monday.api" });
 type BoardCreationSummary = MondayBoardSummary & { workspaceId?: string | null };
 type MondayBoardKind = "public" | "private" | "share";
 
+export type BoardSchema = Record<string, string>;
+
 const NORMALIZED_NAME_SKIP = new Set(["name", "itemname", "pulse"]);
 
 function normalizeColumnKey(value: string | null | undefined): string {
@@ -209,6 +211,95 @@ export async function resolveOAuthToken(
   }
 
   throw new Error("monday.com account is not connected for this user. Reconnect the integration.");
+}
+
+export async function fetchBoardSchema({
+  accessToken,
+  boardId
+}: {
+  accessToken: string;
+  boardId: string;
+}): Promise<BoardSchema> {
+  const boardData = await fetchBoardData(accessToken, boardId, 1);
+  const schema: BoardSchema = {};
+  for (const column of boardData.columns) {
+    const normalized = normalizeColumnKey(column.title);
+    if (!normalized) {
+      continue;
+    }
+    schema[normalized] = column.id;
+  }
+  return schema;
+}
+
+export async function writeBackToMonday({
+  accessToken,
+  boardId,
+  itemId,
+  data
+}: {
+  accessToken: string;
+  boardId: string;
+  itemId: string;
+  data: Record<string, unknown>;
+}): Promise<{ id: string } | null> {
+  const boardData = await fetchBoardData(accessToken, boardId);
+  const columnsById = new Map(boardData.columns.map((column) => [column.id, column]));
+  const columnsByName = new Map(
+    boardData.columns.map((column) => [normalizeColumnKey(column.title), column])
+  );
+  const columnValues: Record<string, unknown> = {};
+
+  for (const [field, rawValue] of Object.entries(data)) {
+    const column =
+      columnsById.get(field) ?? columnsByName.get(normalizeColumnKey(field));
+    if (!column) {
+      logger.warn("No monday column found for field", { boardId, field });
+      continue;
+    }
+
+    let payload: unknown = rawValue;
+    const isPlainObject =
+      typeof rawValue === "object" && rawValue !== null && !Array.isArray(rawValue);
+    if (!isPlainObject) {
+      const formatted = formatColumnValue(rawValue, column.type);
+      if (formatted === null) {
+        continue;
+      }
+      payload = formatted;
+    }
+
+    columnValues[column.id] = payload;
+  }
+
+  const columnIds = Object.keys(columnValues);
+  if (columnIds.length === 0) {
+    throw new Error("No valid columns matched the provided data for monday write-back.");
+  }
+
+  const client = getApiClient({ accessToken });
+  const result = await client<{
+    change_multiple_column_values: { id: string } | null;
+  }>({
+    query: `
+      mutation UpdateItem($boardId: ID!, $itemId: ID!, $columnValues: JSON!) {
+        change_multiple_column_values(
+          board_id: $boardId,
+          item_id: $itemId,
+          column_values: $columnValues
+        ) {
+          id
+        }
+      }
+    `,
+    variables: {
+      boardId,
+      itemId,
+      columnValues: JSON.stringify(columnValues)
+    }
+  });
+
+  return result.change_multiple_column_values ?? null;
 }
 
 export async function fetchBoards(accessToken: string, limit = 50): Promise<MondayBoardSummary[]> {
