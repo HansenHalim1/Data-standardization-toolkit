@@ -91,22 +91,51 @@ export async function exchangeCodeForToken(code: string): Promise<MondayTokenRes
     body: formBody
   });
 
-  const payload = (await response.json().catch(() => null)) as Partial<MondayTokenResponse> & {
+  const rawBody = await response.text();
+  let parsedJson: Partial<MondayTokenResponse> & {
     error?: string;
     error_description?: string;
   };
+  try {
+    parsedJson = JSON.parse(rawBody) as Partial<MondayTokenResponse> & {
+      error?: string;
+      error_description?: string;
+    };
+  } catch {
+    throw new Error(
+      `Token exchange failed: unexpected response (${response.status}) ${rawBody.slice(0, 200)}`
+    );
+  }
 
   if (!response.ok) {
-    const reason = payload?.error ?? response.statusText;
-    const description = payload?.error_description;
-    throw new Error(description ? `${reason}: ${description}` : `Token exchange failed: ${reason}`);
+    const reason = parsedJson?.error ?? response.statusText;
+    const description = parsedJson?.error_description;
+    throw new Error(
+      description
+        ? `${reason}: ${description}`
+        : `Token exchange failed (${response.status}): ${rawBody.slice(0, 200)}`
+    );
   }
 
-  if (!payload?.access_token || payload.token_type !== "Bearer") {
-    throw new Error("Unexpected token response from monday.com");
+  if (!parsedJson?.access_token) {
+    throw new Error(
+      `Unexpected token response from monday.com: missing access_token (${rawBody.slice(0, 200)})`
+    );
   }
 
-  return payload as MondayTokenResponse;
+  if (
+    parsedJson.token_type &&
+    parsedJson.token_type.localeCompare("Bearer", undefined, { sensitivity: "accent" }) !== 0
+  ) {
+    throw new Error(
+      `Unexpected token response from monday.com: token_type=${parsedJson.token_type}`
+    );
+  }
+
+  return {
+    ...parsedJson,
+    token_type: "Bearer"
+  } as MondayTokenResponse;
 }
 
 export function parseScopesToArray(scopeString: string): string[] {
