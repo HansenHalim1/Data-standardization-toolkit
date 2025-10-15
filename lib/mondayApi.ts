@@ -290,17 +290,22 @@ export async function createBoardForRecipe({
   recipe: RecipeDefinition;
   boardName: string;
   boardKind?: MondayBoardKind;
-  workspaceId?: number;
+  workspaceId?: number | string;
 }): Promise<{ boardData: MondayBoardData; summary: BoardCreationSummary }> {
   const client = getApiClient({ accessToken });
   const variables: {
     boardName: string;
     boardKind: MondayBoardKind;
-    workspaceId?: number | null;
+    workspaceId?: string | null;
   } = {
     boardName,
     boardKind,
-    workspaceId: typeof workspaceId === "number" && Number.isFinite(workspaceId) ? workspaceId : null
+    workspaceId:
+      typeof workspaceId === "number" && Number.isFinite(workspaceId)
+        ? String(workspaceId)
+        : typeof workspaceId === "string" && workspaceId.trim().length > 0
+          ? workspaceId.trim()
+          : null
   };
 
   const created = await client<{
@@ -312,7 +317,7 @@ export async function createBoardForRecipe({
     };
   }>({
     query: `
-      mutation CreateBoard($boardName: String!, $boardKind: BoardKind!, $workspaceId: Int) {
+      mutation CreateBoard($boardName: String!, $boardKind: BoardKind!, $workspaceId: ID) {
         create_board(board_name: $boardName, board_kind: $boardKind, workspace_id: $workspaceId) {
           id
           name
