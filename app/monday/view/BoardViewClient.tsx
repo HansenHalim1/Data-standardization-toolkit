@@ -210,7 +210,8 @@ const templates: Template[] = [
         {
           type: "write_back",
           config: {
-            strategy: "csv"
+            strategy: "monday_upsert",
+            keyColumn: "order_id"
           }
         }
       ]

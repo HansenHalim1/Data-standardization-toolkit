@@ -109,6 +109,13 @@ export async function POST(request: Request) {
       if (!writeConfig.boardId || !writeConfig.columnMapping) {
         throw new Error("Missing monday board configuration for write-back");
       }
+      logger.info("Run write-back triggered", {
+        tenantId: tenant.id,
+        boardId: writeConfig.boardId,
+        rows: rows.length,
+        columnMappingKeys: Object.keys(writeConfig.columnMapping),
+        keyColumn: writeConfig.keyColumn ?? null
+      });
       try {
         await upsertRowsToBoard({
           accessToken,
