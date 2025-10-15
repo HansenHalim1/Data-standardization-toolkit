@@ -41,23 +41,54 @@ export async function resolveOAuthToken(
 ): Promise<string> {
   const accountNumeric = Number(accountId);
   const userNumeric = Number(userId);
-  const accountFilter = Number.isFinite(accountNumeric) ? accountNumeric : accountId;
-  const userFilter = Number.isFinite(userNumeric) ? userNumeric : userId;
 
-  const { data, error } = await supabase
-    .from("monday_oauth_tokens")
-    .select("access_token")
-    .eq("account_id", accountFilter)
-    .eq("user_id", userFilter)
-    .maybeSingle();
+  const accountCandidates: Array<string | number> = Number.isFinite(accountNumeric)
+    ? [accountNumeric, accountId]
+    : [accountId];
+  const userCandidates: Array<string | number> = Number.isFinite(userNumeric)
+    ? [userNumeric, userId]
+    : [userId];
 
-  if (error) {
-    throw new Error(`Failed to load monday OAuth token: ${error.message}`);
+  for (const accountCandidate of accountCandidates) {
+    for (const userCandidate of userCandidates) {
+      const { data, error } = await supabase
+        .from("monday_oauth_tokens")
+        .select("access_token")
+        .eq("account_id", accountCandidate)
+        .eq("user_id", userCandidate)
+        .maybeSingle();
+
+      if (error) {
+        throw new Error(`Failed to load monday OAuth token: ${error.message}`);
+      }
+      if (data?.access_token) {
+        return data.access_token;
+      }
+    }
   }
-  if (!data?.access_token) {
-    throw new Error("monday.com account is not connected for this user. Reconnect the integration.");
+
+  for (const accountCandidate of accountCandidates) {
+    const { data, error } = await supabase
+      .from("monday_oauth_tokens")
+      .select("access_token")
+      .eq("account_id", accountCandidate)
+      .order("updated_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (error) {
+      throw new Error(`Failed to load monday OAuth token: ${error.message}`);
+    }
+    if (data?.access_token) {
+      logger.warn("Falling back to account-level monday token (user mismatch)", {
+        accountId: accountCandidate,
+        requestedUserId: userId
+      });
+      return data.access_token;
+    }
   }
-  return data.access_token;
+
+  throw new Error("monday.com account is not connected for this user. Reconnect the integration.");
 }
 
 export async function fetchBoards(accessToken: string, limit = 50): Promise<MondayBoardSummary[]> {
