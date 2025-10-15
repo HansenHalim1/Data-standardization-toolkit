@@ -136,6 +136,21 @@ export async function GET(request: Request) {
     return renderRetryResponse(500, "Unable to persist monday.com token. Please try again.");
   }
 
+  const mondayAccountIdValue = String(accountId);
+  const tenantUpsertResult = await supabase.from("tenants").upsert(
+    {
+      monday_account_id: mondayAccountIdValue,
+      plan: "free",
+      seats: 1,
+      updated_at: new Date().toISOString()
+    },
+    { onConflict: "monday_account_id" }
+  );
+
+  if (tenantUpsertResult.error) {
+    logger.warn("Tenant upsert failed after OAuth", { message: tenantUpsertResult.error.message });
+  }
+
   logger.info("monday OAuth completed", {
     accountId,
     userId,

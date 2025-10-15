@@ -26,14 +26,72 @@ export async function POST(request: Request) {
     }
 
     const supabase = getServiceSupabase();
-    const { data: tenantData } = await supabase
-      .from("tenants")
-      .select("id, plan, seats")
-      .eq("monday_account_id", accountId)
-      .maybeSingle();
+    const accountIdNumber = Number(accountId);
+    const accountQueryValues = Number.isFinite(accountIdNumber)
+      ? [accountIdNumber, accountId]
+      : [accountId];
 
-    const tenant = tenantData as TenantRecord | null;
+    let tenantData: TenantRecord | null = null;
+    let tenantError: { message: string } | null = null;
+
+    for (const value of accountQueryValues) {
+      const { data, error } = await supabase
+        .from("tenants")
+        .select("id, plan, seats")
+        .eq("monday_account_id", value)
+        .maybeSingle();
+
+      if (error) {
+        tenantError = { message: error.message };
+        break;
+      }
+      if (data) {
+        tenantData = data as TenantRecord;
+        break;
+      }
+    }
+
+    if (!tenantData && !tenantError) {
+      const upsertPayload = {
+        monday_account_id: accountId,
+        plan: "free",
+        seats: 1,
+        updated_at: new Date().toISOString()
+      };
+
+      const upsertResult = await supabase
+        .from("tenants")
+        .upsert(upsertPayload, { onConflict: "monday_account_id" });
+
+      if (upsertResult.error) {
+        tenantError = { message: upsertResult.error.message };
+        logger.warn("Tenant auto-provision failed", { error: upsertResult.error.message });
+      } else {
+        for (const value of accountQueryValues) {
+          const { data, error } = await supabase
+            .from("tenants")
+            .select("id, plan, seats")
+            .eq("monday_account_id", value)
+            .maybeSingle();
+          if (error) {
+            tenantError = { message: error.message };
+            break;
+          }
+          if (data) {
+            tenantData = data as TenantRecord;
+            logger.info("Tenant auto-provisioned from monday context verify", { accountId });
+            break;
+          }
+        }
+      }
+    }
+
+    const tenant = tenantData;
     if (!tenant) {
+      if (tenantError) {
+        logger.warn("Tenant lookup failed", { accountId, error: tenantError.message });
+        return new NextResponse("Tenant lookup failed", { status: 500 });
+      }
       return new NextResponse("Tenant not found", { status: 404 });
     }
 
