@@ -4,6 +4,7 @@ import { getServiceSupabase } from "@/lib/db";
 import { verifyMondaySessionToken } from "@/lib/security";
 import { fetchBoardData, resolveOAuthToken } from "@/lib/mondayApi";
 import { prepareRecipeForBoard } from "@/lib/mondayRecipes";
+import type { RecipeDefinition } from "@/lib/recipe-engine";
 
 const recipeSchema = z.object({
   id: z.string(),
@@ -47,8 +48,9 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
       return new NextResponse((error as Error).message, { status: 403 });
     }
 
+    const recipe = parsed.data.recipe as RecipeDefinition;
     const boardData = await fetchBoardData(accessToken, params.boardId);
-    const preparedRecipe = prepareRecipeForBoard(parsed.data.recipe, boardData);
+    const preparedRecipe = prepareRecipeForBoard(recipe, boardData);
 
     return NextResponse.json({
       preparedRecipe,
