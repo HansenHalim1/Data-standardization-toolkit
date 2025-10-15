@@ -1,3 +1,5 @@
+import { promises as fs } from "fs";
+import path from "path";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createLogger } from "./logging";
 import { getApiClient } from "./mondayOAuth";
@@ -40,6 +42,8 @@ type MondayBoardKind = "public" | "private" | "share";
 export type BoardSchema = Record<string, string>;
 
 const NORMALIZED_NAME_SKIP = new Set(["name", "itemname", "pulse"]);
+
+const PAYLOAD_LOG_FILE = path.join(process.cwd(), "monday_payload.log");
 
 function normalizeColumnKey(value: string | null | undefined): string {
   return value ? value.toString().trim().toLowerCase().replace(/[^a-z0-9]/g, "") : "";
@@ -158,6 +162,23 @@ function formatColumnValue(rawValue: unknown, columnType?: string): unknown | nu
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function logMondayPayload(entry: { query: string; variables: unknown }) {
+  const timestamp = new Date().toISOString();
+  const payload = {
+    timestamp,
+    ...entry
+  };
+  const serialized = `${JSON.stringify(payload)}\n`;
+
+  try {
+    await fs.appendFile(PAYLOAD_LOG_FILE, serialized, { encoding: "utf8" });
+  } catch (error) {
+    logger.warn("Failed to write monday payload log", {
+      error: error instanceof Error ? error.message : String(error)
+    });
+  }
 }
 
 export async function resolveOAuthToken(
@@ -282,6 +303,27 @@ export async function writeBackToMonday({
   }
 
   const client = getApiClient({ accessToken });
+  const variables = {
+    boardId,
+    itemId,
+    columnValues: JSON.stringify(columnValues)
+  };
+
+  await logMondayPayload({
+    query: `
+      mutation UpdateItem($boardId: ID!, $itemId: ID!, $columnValues: JSON!) {
+        change_multiple_column_values(
+          board_id: $boardId,
+          item_id: $itemId,
+          column_values: $columnValues
+        ) {
+          id
+        }
+      }
+    `,
+    variables
+  });
+
   const result = await client<{
     change_multiple_column_values: { id: string } | null;
   }>({
@@ -296,11 +338,7 @@ export async function writeBackToMonday({
         }
       }
     `,
-    variables: {
-      boardId,
-      itemId,
-      columnValues: JSON.stringify(columnValues)
-    }
+    variables
   });
 
   return result.change_multiple_column_values ?? null;
