@@ -1,5 +1,6 @@
 'use client';
 
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
 import mondaySdk from "monday-sdk-js";
 import type { RecipeDefinition, RecipePreviewResult } from "@/lib/recipe-engine";
@@ -437,9 +438,20 @@ export default function BoardViewClient() {
         <p className="text-sm text-muted-foreground">
           Upload a CSV/XLSX or choose a monday board source to preview transformations before writing back.
         </p>
-        {context && (
-          <UsageBadge used={context.usage.rowsProcessed} cap={context.flags.rowCap} />
-        )}
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          {context && (
+            <UsageBadge used={context.usage.rowsProcessed} cap={context.flags.rowCap} />
+          )}
+          <Button
+            asChild
+            variant="outline"
+            size="sm"
+          >
+            <Link href="/settings/monday" target="_blank" rel="noopener noreferrer">
+              Open settings
+            </Link>
+          </Button>
+        </div>
         {contextError && <p className="text-sm text-destructive">{contextError}</p>}
       </header>
 
