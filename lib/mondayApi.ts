@@ -162,7 +162,14 @@ function sleep(ms: number): Promise<void> {
 
 async function logMondayPayload(entry: { query: string; variables: unknown }) {
   const timestamp = new Date().toISOString();
-  logger.info("Monday mutation payload", { timestamp, ...entry });
+  console.log(
+    JSON.stringify({
+      ts: timestamp,
+      level: "info",
+      msg: "Monday mutation payload",
+      payload: entry
+    })
+  );
 }
 
 export async function resolveOAuthToken(
