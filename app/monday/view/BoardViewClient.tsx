@@ -219,17 +219,42 @@ const templates: Template[] = [
 const DEFAULT_TEMPLATE_ID =
   templates.find((template) => !template.premium)?.id ?? templates[0]?.id ?? "";
 
+type DataSource = "file" | "board";
+
+type MondayBoardOption = {
+  id: string;
+  name: string;
+  workspaceName?: string | null;
+  kind?: string | null;
+};
+
+type PreviewResponse = RecipePreviewResult & {
+  runId?: string;
+  preparedRecipe?: RecipeDefinition;
+  sourceBoard?: {
+    boardId: string;
+    boardName: string;
+  };
+};
+
 export default function BoardViewClient() {
   const [context, setContext] = useState<MondayContext | null>(null);
   const [contextError, setContextError] = useState<string | null>(null);
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>(DEFAULT_TEMPLATE_ID);
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
-  const [preview, setPreview] = useState<(RecipePreviewResult & { runId?: string }) | null>(null);
+  const [preview, setPreview] = useState<PreviewResponse | null>(null);
+  const [preparedRecipe, setPreparedRecipe] = useState<RecipeDefinition | null>(null);
   const [toast, setToast] = useState<{ message: string; variant?: "default" | "success" | "error" } | null>(
     null
   );
   const [isPreviewing, startPreview] = useTransition();
   const [isExecuting, startExecute] = useTransition();
+  const [dataSource, setDataSource] = useState<DataSource>("file");
+  const [boards, setBoards] = useState<MondayBoardOption[]>([]);
+  const [isLoadingBoards, setLoadingBoards] = useState(false);
+  const [boardsError, setBoardsError] = useState<string | null>(null);
+  const [selectedBoardId, setSelectedBoardId] = useState<string>("");
+  const [sourceBoard, setSourceBoard] = useState<PreviewResponse["sourceBoard"] | null>(null);
 
   const mondayClient = useMemo(() => {
     if (typeof window === "undefined") {
@@ -254,6 +279,35 @@ export default function BoardViewClient() {
     }
     return token;
   }, [mondayClient]);
+
+  const loadBoards = useCallback(async () => {
+    const sessionToken = await getSessionToken();
+    const response = await fetch("/api/monday/boards", {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${sessionToken}`
+      }
+    });
+    if (!response.ok) {
+      throw new Error(await response.text());
+    }
+    const data = (await response.json()) as { boards?: MondayBoardOption[] };
+    return data.boards ?? [];
+  }, [getSessionToken]);
+
+  const refreshBoards = useCallback(async () => {
+    try {
+      setLoadingBoards(true);
+      setBoardsError(null);
+      const boardsList = await loadBoards();
+      setBoards(boardsList);
+    } catch (error) {
+      setBoards([]);
+      setBoardsError((error as Error).message ?? "Failed to load boards.");
+    } finally {
+      setLoadingBoards(false);
+    }
+  }, [loadBoards]);
 
   useEffect(() => {
     if (!mondayClient) {
@@ -298,6 +352,66 @@ export default function BoardViewClient() {
 
   const planAllowsFuzzy = context?.flags.fuzzyMatching ?? false;
   const needsPremium = context ? !!selectedTemplate?.premium && !planAllowsFuzzy : false;
+  const canPreview =
+    Boolean(context) &&
+    !needsPremium &&
+    !isPreviewing &&
+    ((dataSource === "file" && Boolean(uploadedFile)) || (dataSource === "board" && Boolean(selectedBoardId)));
+
+  useEffect(() => {
+    if (dataSource !== "board" || !mondayClient) {
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        setLoadingBoards(true);
+        setBoardsError(null);
+        const boardsList = await loadBoards();
+        if (!cancelled) {
+          setBoards(boardsList);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setBoards([]);
+          setBoardsError((error as Error).message ?? "Failed to load boards.");
+        }
+      } finally {
+        if (!cancelled) {
+          setLoadingBoards(false);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [dataSource, loadBoards, mondayClient]);
+
+  useEffect(() => {
+    setPreview(null);
+    setPreparedRecipe(null);
+    setSourceBoard(null);
+    setBoardsError(null);
+    if (dataSource === "file") {
+      setSelectedBoardId("");
+    } else {
+      setUploadedFile(null);
+    }
+  }, [dataSource]);
+
+  useEffect(() => {
+    setPreview(null);
+    setPreparedRecipe(null);
+    setSourceBoard(null);
+  }, [selectedTemplateId]);
+
+  useEffect(() => {
+    if (dataSource === "board") {
+      setPreview(null);
+      setPreparedRecipe(null);
+      setSourceBoard(null);
+    }
+  }, [selectedBoardId, dataSource]);
 
   useEffect(() => {
     if (!context) {
@@ -363,21 +477,132 @@ export default function BoardViewClient() {
 
         <Card>
           <CardHeader>
-            <CardTitle>2. Upload data</CardTitle>
-            <CardDescription>Supports CSV or XLSX up to 5 MB.</CardDescription>
+            <CardTitle>2. Select data source</CardTitle>
+            <CardDescription>Preview via upload or directly from a monday board.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            <UploadDropzone
-              onFile={(file) => {
-                setUploadedFile(file);
-                setPreview(null);
-                setToast({ message: `Loaded ${file.name}`, variant: "success" });
-              }}
-            />
+            <div className="space-y-2">
+              <Label htmlFor="data-source">Source</Label>
+              <Select
+                id="data-source"
+                value={dataSource}
+                onChange={(event) => setDataSource(event.target.value as DataSource)}
+              >
+                <option value="file">Upload CSV/XLSX</option>
+                <option value="board">monday.com board</option>
+              </Select>
+            </div>
+
+            {dataSource === "file" ? (
+              <>
+                <UploadDropzone
+                  onFile={(file) => {
+                    setDataSource("file");
+                    setUploadedFile(file);
+                    setPreview(null);
+                    setPreparedRecipe(null);
+                    setSourceBoard(null);
+                    setToast({ message: `Loaded ${file.name}`, variant: "success" });
+                  }}
+                />
+                {uploadedFile && (
+                  <p className="text-xs text-muted-foreground truncate">Ready: {uploadedFile.name}</p>
+                )}
+              </>
+            ) : (
+              <div className="space-y-3">
+                <div className="space-y-2">
+                  <Label htmlFor="board-select">Board</Label>
+                  <div className="flex flex-col gap-2 sm:flex-row">
+                    <Select
+                      id="board-select"
+                      value={selectedBoardId}
+                      onChange={(event) => setSelectedBoardId(event.target.value)}
+                      className="sm:flex-1"
+                    >
+                      <option value="">Select a board</option>
+                      {boards.map((board) => (
+                        <option key={board.id} value={board.id}>
+                          {board.name}
+                          {board.workspaceName ? ` — ${board.workspaceName}` : ""}
+                        </option>
+                      ))}
+                    </Select>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => {
+                        if (!mondayClient) {
+                          setBoardsError("Missing monday context. Open this app inside monday.");
+                          return;
+                        }
+                        refreshBoards();
+                      }}
+                      disabled={isLoadingBoards}
+                    >
+                      {isLoadingBoards ? "Refreshing..." : "Refresh"}
+                    </Button>
+                  </div>
+                  {isLoadingBoards && (
+                    <p className="text-xs text-muted-foreground">Loading boards…</p>
+                  )}
+                  {boardsError && <p className="text-xs text-destructive">{boardsError}</p>}
+                  {sourceBoard && (
+                    <p className="text-xs text-muted-foreground">
+                      Previewing data from <strong>{sourceBoard.boardName}</strong>
+                    </p>
+                  )}
+                </div>
+              </div>
+            )}
+
             <Button
-              disabled={!uploadedFile || !context || isPreviewing || needsPremium}
+              disabled={!canPreview}
               onClick={() => {
-                if (!uploadedFile || !context || !selectedTemplate) return;
+                if (!context || !selectedTemplate) return;
+                if (dataSource === "board") {
+                  if (!selectedBoardId) {
+                    setToast({ message: "Select a board to preview.", variant: "error" });
+                    return;
+                  }
+                  startPreview(async () => {
+                    try {
+                      const sessionToken = await getSessionToken();
+                      const response = await fetch("/api/recipes/run/preview", {
+                        method: "POST",
+                        headers: {
+                          "Content-Type": "application/json",
+                          Authorization: `Bearer ${sessionToken}`
+                        },
+                        body: JSON.stringify({
+                          source: { type: "board", boardId: selectedBoardId },
+                          recipe: selectedTemplate.recipe,
+                          plan: context.plan
+                        })
+                      });
+                      if (!response.ok) {
+                        throw new Error(await response.text());
+                      }
+                      const result = (await response.json()) as PreviewResponse;
+                      setPreview(result);
+                      setPreparedRecipe(result.preparedRecipe ?? selectedTemplate.recipe);
+                      setSourceBoard(result.sourceBoard ?? null);
+                      setToast({
+                        message: `Preview ready${result.sourceBoard ? ` for ${result.sourceBoard.boardName}` : ""}`,
+                        variant: "success"
+                      });
+                    } catch (error) {
+                      setToast({ message: (error as Error).message, variant: "error" });
+                    }
+                  });
+                  return;
+                }
+
+                if (!uploadedFile) {
+                  setToast({ message: "Upload a file to preview.", variant: "error" });
+                  return;
+                }
+
                 startPreview(async () => {
                   try {
                     const sessionToken = await getSessionToken();
@@ -396,8 +621,10 @@ export default function BoardViewClient() {
                     if (!response.ok) {
                       throw new Error(await response.text());
                     }
-                    const result = (await response.json()) as RecipePreviewResult & { runId?: string };
+                    const result = (await response.json()) as PreviewResponse;
                     setPreview(result);
+                    setPreparedRecipe(selectedTemplate.recipe);
+                    setSourceBoard(null);
                     setToast({ message: "Preview ready", variant: "success" });
                   } catch (error) {
                     setToast({ message: (error as Error).message, variant: "error" });
@@ -446,6 +673,7 @@ export default function BoardViewClient() {
                   startExecute(async () => {
                     try {
                       const sessionToken = await getSessionToken();
+                      const recipeForExecution = preparedRecipe ?? selectedTemplate.recipe;
                       const response = await fetch("/api/recipes/run/execute", {
                         method: "POST",
                         headers: {
@@ -454,7 +682,7 @@ export default function BoardViewClient() {
                         },
                         body: JSON.stringify({
                           tenantId: context.tenantId,
-                          recipe: selectedTemplate.recipe,
+                          recipe: recipeForExecution,
                           runId: preview.runId,
                           previewRows: preview.rows,
                           plan: context.plan

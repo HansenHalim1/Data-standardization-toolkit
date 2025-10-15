@@ -2,12 +2,12 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getServiceSupabase } from "@/lib/db";
 import { flagsForPlan } from "@/lib/entitlements";
-import { executeRecipe, type RecipeDefinition } from "@/lib/recipe-engine";
-import { chunkArray } from "@/lib/utils";
+import { executeRecipe, type RecipeDefinition, type WriteBackStep } from "@/lib/recipe-engine";
 import { createLogger } from "@/lib/logging";
 import { monthKey } from "@/lib/ids";
 import type { Database } from "@/types/supabase";
 import { verifyMondaySessionToken } from "@/lib/security";
+import { resolveOAuthToken, upsertRowsToBoard } from "@/lib/mondayApi";
 
 type TenantRecord = Pick<Database["public"]["Tables"]["tenants"]["Row"], "id" | "plan" | "seats">;
 type RunUpdate = Database["public"]["Tables"]["runs"]["Update"];
@@ -28,8 +28,6 @@ const executeSchema = z.object({
   plan: z.string().optional(),
   previewRows: z.array(z.record(z.any()))
 });
-
-const CHUNK_SIZE = 500;
 
 export async function POST(request: Request) {
   const logger = createLogger({ component: "recipes.execute" });
@@ -78,6 +76,16 @@ export async function POST(request: Request) {
       return new NextResponse("Plan mismatch", { status: 409 });
     }
 
+    let accessToken: string;
+    try {
+      accessToken = await resolveOAuthToken(supabase, accountKey, String(userId));
+    } catch (tokenError) {
+      logger.warn("Missing monday OAuth token for write-back", { accountId: accountKey, error: (tokenError as Error).message });
+      return new NextResponse("monday.com account is not connected. Please reconnect via settings.", {
+        status: 403
+      });
+    }
+
     if (runId) {
       const runningUpdate: RunUpdate = {
         status: "running",
@@ -94,14 +102,30 @@ export async function POST(request: Request) {
       rows: Record<string, unknown>[],
       config: RecipeDefinition["steps"][number]["config"]
     ) => {
-      const strategy = (config as { strategy?: string })?.strategy;
-      for (const chunk of chunkArray(rows, CHUNK_SIZE)) {
-        logger.info("Write-back chunk", { tenantId: tenant.id, size: chunk.length });
-        if (strategy === "csv") {
-          // CSV exports handled separately. This stub could enqueue file generation.
-        } else {
-          // TODO: integrate monday GraphQL upsert once access token is persisted.
-        }
+      const writeConfig = config as WriteBackStep["config"];
+      if (writeConfig.strategy !== "monday_upsert") {
+        return;
+      }
+      if (!writeConfig.boardId || !writeConfig.columnMapping) {
+        throw new Error("Missing monday board configuration for write-back");
+      }
+      try {
+        await upsertRowsToBoard({
+          accessToken,
+          boardId: writeConfig.boardId,
+          columnMapping: writeConfig.columnMapping,
+          rows,
+          keyColumn: writeConfig.keyColumn,
+          keyColumnId: writeConfig.keyColumnId,
+          itemNameField: writeConfig.itemNameField
+        });
+      } catch (error) {
+        logger.error("monday write-back failed", {
+          tenantId: tenant.id,
+          boardId: writeConfig.boardId,
+          error: (error as Error).message
+        });
+        throw error;
       }
     };
 

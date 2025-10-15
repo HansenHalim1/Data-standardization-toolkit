@@ -88,8 +88,11 @@ export type WriteBackStep = {
   type: "write_back";
   config: {
     strategy: "monday_upsert" | "csv";
-    boardId?: number;
+    boardId?: string;
     keyColumn?: string;
+    keyColumnId?: string;
+    columnMapping?: Record<string, string>;
+    itemNameField?: string;
   };
 };
 
