@@ -819,39 +819,59 @@ export async function upsertRowsToBoard({
       "Standardized row";
 
     if (existingItemId) {
-      await client({
-        query: `
+      const query = `
           mutation UpdateItem($boardId: ID!, $itemId: ID!, $columnValues: JSON!) {
             change_multiple_column_values(board_id: $boardId, item_id: $itemId, column_values: $columnValues) {
               id
             }
           }
-        `,
-        variables: {
-          boardId,
-          itemId: existingItemId,
-          columnValues: columnValuesJson
-        }
+        `;
+      const variables = {
+        boardId,
+        itemId: existingItemId,
+        columnValues: columnValuesJson
+      };
+      console.log(
+        JSON.stringify({
+          ts: new Date().toISOString(),
+          level: "info",
+          msg: "Monday mutation payload",
+          payload: { query, variables }
+        })
+      );
+      await client({
+        query,
+        variables
       });
       logger.debug("Updated monday item", { boardId, itemId: existingItemId });
       continue;
     }
 
-    const createResult = await client<{
-      create_item: { id: string };
-    }>({
-      query: `
+    const createQuery = `
         mutation CreateItem($boardId: ID!, $itemName: String!, $columnValues: JSON!) {
           create_item(board_id: $boardId, item_name: $itemName, column_values: $columnValues) {
             id
           }
         }
-      `,
-      variables: {
-        boardId,
-        itemName,
-        columnValues: columnValuesJson
-      }
+      `;
+    const createVariables = {
+      boardId,
+      itemName,
+      columnValues: columnValuesJson
+    };
+    console.log(
+      JSON.stringify({
+        ts: new Date().toISOString(),
+        level: "info",
+        msg: "Monday mutation payload",
+        payload: { query: createQuery, variables: createVariables }
+      })
+    );
+    const createResult = await client<{
+      create_item: { id: string };
+    }>({
+      query: createQuery,
+      variables: createVariables
     });
 
     if (normalizedKey && createResult.create_item?.id) {
