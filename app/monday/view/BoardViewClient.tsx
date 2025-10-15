@@ -211,7 +211,8 @@ const templates: Template[] = [
           type: "write_back",
           config: {
             strategy: "monday_upsert",
-            keyColumn: "order_id"
+            keyColumn: "order_id",
+            keyColumnId: "text_mkwrgn66"
           }
         }
       ]
