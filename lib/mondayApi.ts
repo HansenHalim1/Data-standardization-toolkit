@@ -109,6 +109,49 @@ function collectRecipeFields(recipe: RecipeDefinition): string[] {
   return Array.from(fields);
 }
 
+function normalizeDateValue(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+    return trimmed;
+  }
+  const parsed = new Date(trimmed);
+  if (Number.isNaN(parsed.getTime())) {
+    return null;
+  }
+  return parsed.toISOString().slice(0, 10);
+}
+
+function formatColumnValue(rawValue: unknown, columnType?: string): unknown | null {
+  if (rawValue === null || rawValue === undefined) {
+    return null;
+  }
+  const normalized = typeof rawValue === "string" ? rawValue.trim() : String(rawValue).trim();
+  if (!normalized) {
+    return null;
+  }
+
+  switch (columnType) {
+    case "email":
+      return {
+        email: normalized,
+        text: normalized
+      };
+    case "phone":
+      return {
+        phone: normalized
+      };
+    case "date": {
+      const dateValue = normalizeDateValue(normalized);
+      return dateValue ? { date: dateValue } : null;
+    }
+    default:
+      return normalized;
+  }
+}
+
 export async function resolveOAuthToken(
   supabase: SupabaseClient<Database>,
   accountId: string,
@@ -428,56 +471,6 @@ export async function createBoardForRecipe({
   };
 }
 
-export async function fetchBoardKeyMap(
-  accessToken: string,
-  boardId: string,
-  keyColumnId: string,
-  itemLimit = 500
-): Promise<Map<string, string>> {
-  const client = getApiClient({ accessToken });
-  const data = await client<{
-    boards: Array<{
-      items_page: {
-        items: Array<{
-          id: string;
-          column_values: Array<{ id: string; text: string | null }>;
-        }>;
-      };
-    }>;
-  }>({
-    query: `
-      query BoardKeyValues($boardId: [ID!], $limit: Int!, $columnId: [String!]) {
-        boards(ids: $boardId) {
-          items_page(limit: $limit) {
-            items {
-              id
-              column_values(ids: $columnId) {
-                id
-                text
-              }
-            }
-          }
-        }
-      }
-    `,
-    variables: {
-      boardId: [boardId],
-      limit: itemLimit,
-      columnId: [String(keyColumnId)]
-    }
-  });
-
-  const map = new Map<string, string>();
-  const items = data.boards?.[0]?.items_page?.items ?? [];
-  for (const item of items) {
-    const value = item.column_values?.[0]?.text;
-    if (value) {
-      map.set(value.trim().toLowerCase(), item.id);
-    }
-  }
-  return map;
-}
-
 export async function upsertRowsToBoard({
   accessToken,
   boardId,
@@ -496,19 +489,27 @@ export async function upsertRowsToBoard({
   itemNameField?: string;
 }): Promise<void> {
   const client = getApiClient({ accessToken });
-  const keyMap =
-    keyColumn && keyColumnId
-      ? await fetchBoardKeyMap(accessToken, boardId, keyColumnId)
-      : new Map<string, string>();
+  const boardData = await fetchBoardData(accessToken, boardId);
+  const columnTypes = new Map(boardData.columns.map((column) => [column.id, column.type]));
+  const keyMap = new Map<string, string>();
+  if (keyColumn && keyColumnId) {
+    for (const item of boardData.items) {
+      const keyValue = item.column_values?.find((value) => value.id === keyColumnId)?.text;
+      if (keyValue) {
+        keyMap.set(keyValue.trim().toLowerCase(), item.id);
+      }
+    }
+  }
 
   for (const row of rows) {
     const columnValues: Record<string, unknown> = {};
     for (const [field, columnId] of Object.entries(columnMapping)) {
       const value = row[field];
-      if (value === undefined || value === null) {
+      const formatted = formatColumnValue(value, columnTypes.get(columnId));
+      if (formatted === null) {
         continue;
       }
-      columnValues[columnId] = String(value);
+      columnValues[columnId] = formatted;
     }
 
     const columnValuesJson = JSON.stringify(columnValues);
