@@ -216,10 +216,13 @@ const templates: Template[] = [
   }
 ];
 
+const DEFAULT_TEMPLATE_ID =
+  templates.find((template) => !template.premium)?.id ?? templates[0]?.id ?? "";
+
 export default function BoardViewClient() {
   const [context, setContext] = useState<MondayContext | null>(null);
   const [contextError, setContextError] = useState<string | null>(null);
-  const [selectedTemplateId, setSelectedTemplateId] = useState<string>(templates[0]?.id ?? "");
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string>(DEFAULT_TEMPLATE_ID);
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<(RecipePreviewResult & { runId?: string }) | null>(null);
   const [toast, setToast] = useState<{ message: string; variant?: "default" | "success" | "error" } | null>(
@@ -296,6 +299,23 @@ export default function BoardViewClient() {
   const planAllowsFuzzy = context?.flags.fuzzyMatching ?? false;
   const needsPremium = context ? !!selectedTemplate?.premium && !planAllowsFuzzy : false;
 
+  useEffect(() => {
+    if (!context) {
+      return;
+    }
+    if (!needsPremium) {
+      return;
+    }
+    const fallback = templates.find((template) => !template.premium);
+    if (fallback && fallback.id !== selectedTemplateId) {
+      setSelectedTemplateId(fallback.id);
+      setToast({
+        message: `${selectedTemplate?.name ?? "This template"} requires an upgraded plan. Switched to ${fallback.name}.`,
+        variant: "default"
+      });
+    }
+  }, [context, needsPremium, selectedTemplate?.name, selectedTemplateId]);
+
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-8 px-4 py-10">
       <header className="flex flex-col gap-2">
@@ -327,10 +347,17 @@ export default function BoardViewClient() {
               {templates.map((template) => (
                 <option key={template.id} value={template.id}>
                   {template.name}
+                  {template.premium ? " (Premium)" : ""}
                 </option>
               ))}
             </Select>
             <p className="text-xs text-muted-foreground">{selectedTemplate?.description}</p>
+            {needsPremium && (
+              <p className="text-xs text-destructive">
+                {selectedTemplate?.name} requires an upgraded plan with fuzzy deduplication. Choose another template or
+                upgrade to unlock it.
+              </p>
+            )}
           </CardContent>
         </Card>
 
