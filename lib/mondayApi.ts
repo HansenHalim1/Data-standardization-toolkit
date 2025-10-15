@@ -335,109 +335,112 @@ export async function writeBackToMonday({
   return result.change_multiple_column_values ?? null;
 }
 
-type MondayBatchRow = {
-  itemId: string;
-  data: Record<string, unknown>;
-};
-
-type MondayBatchResult =
-  | { itemId: string; ok: true; res: { id: string } | null; attempts: number }
-  | { itemId: string; ok: false; error: string; attempts: number };
-
-export async function writeBackBatchSafe({
+export async function upsertRowsToBoardBatchSafe({
   accessToken,
   boardId,
+  columnMapping,
   rows,
+  keyColumn,
+  keyColumnId,
+  itemNameField,
   batchSize = 5,
   delayMs = 600,
   maxRetries = 3
 }: {
   accessToken: string;
   boardId: string;
-  rows: MondayBatchRow[];
+  columnMapping: MondayColumnMapping;
+  rows: RecipeRow[];
+  keyColumn?: string;
+  keyColumnId?: string;
+  itemNameField?: string;
   batchSize?: number;
   delayMs?: number;
   maxRetries?: number;
 }): Promise<{
   totalSuccess: number;
   totalFailed: number;
-  results: MondayBatchResult[];
+  results: Array<{ itemId?: string; ok: boolean; attempts: number; error?: string }>;
 }> {
   if (batchSize <= 0) {
     throw new Error("batchSize must be greater than zero.");
   }
 
-  const results: MondayBatchResult[] = [];
+  const results: Array<{ itemId?: string; ok: boolean; attempts: number; error?: string }> = [];
   let totalSuccess = 0;
   let totalFailed = 0;
-
   const totalBatches = Math.ceil(rows.length / batchSize) || 1;
+
+  logger.info("Starting batch-safe monday upsert", { boardId, totalBatches, batchSize });
 
   for (let i = 0; i < rows.length; i += batchSize) {
     const batchNumber = Math.floor(i / batchSize) + 1;
     const slice = rows.slice(i, i + batchSize);
-    logger.info("Processing monday write-back batch", {
-      boardId,
-      batchNumber,
-      totalBatches,
-      batchSize: slice.length
-    });
+
+    logger.info("Processing monday batch", { boardId, batchNumber, batchSize: slice.length });
 
     const batchResults = await Promise.all(
-      slice.map(async (row): Promise<MondayBatchResult> => {
+      slice.map(async (row) => {
+        const candidateItemId =
+          typeof row.item_id === "string" ? row.item_id : undefined;
         let attempt = 0;
-        while (attempt <= maxRetries) {
+        let lastError: string | undefined;
+
+        while (attempt < maxRetries) {
+          attempt += 1;
           try {
-            const res = await writeBackToMonday({
+            await upsertRowsToBoard({
               accessToken,
               boardId,
-              itemId: row.itemId,
-              data: row.data
+              columnMapping,
+              rows: [row],
+              keyColumn,
+              keyColumnId,
+              itemNameField
             });
-            return { itemId: row.itemId, ok: true, res, attempts: attempt + 1 };
+
+            return { itemId: candidateItemId, ok: true, attempts: attempt };
           } catch (error) {
-            attempt += 1;
             const message =
               error instanceof Error ? error.message : typeof error === "string" ? error : "Unknown error";
+            lastError = message;
             const normalized = message.toLowerCase();
-            const isRateLimit = normalized.includes("rate") || normalized.includes("429");
+            const isRateLimit = normalized.includes("429") || normalized.includes("rate");
             const isServerError =
               normalized.includes("500") ||
               normalized.includes("502") ||
               normalized.includes("503") ||
               normalized.includes("504");
 
-            if ((isRateLimit || isServerError) && attempt <= maxRetries) {
-              const wait =
-                delayMs * Math.pow(2, attempt - 1) + Math.random() * 250;
-              logger.warn("Retrying monday write-back after transient failure", {
+            if ((isRateLimit || isServerError) && attempt < maxRetries) {
+              const backoff = delayMs * Math.pow(2, attempt - 1);
+              logger.warn("Retrying monday upsert", {
                 boardId,
-                itemId: row.itemId,
                 attempt,
                 maxRetries,
-                waitMs: Math.round(wait),
+                waitMs: Math.round(backoff),
                 message
               });
-              await sleep(wait);
+              await sleep(backoff);
               continue;
             }
 
-            logger.error("Failed monday write-back", {
+            logger.error("Permanent monday write-back failure", {
               boardId,
-              itemId: row.itemId,
-              attempts: attempt,
-              error: message
+              attempt,
+              message
             });
-            return { itemId: row.itemId, ok: false, error: message, attempts: attempt };
+            return { itemId: candidateItemId, ok: false, attempts: attempt, error: message };
           }
         }
 
-        return {
-          itemId: row.itemId,
-          ok: false,
-          error: "Exceeded retry attempts for monday write-back.",
-          attempts: attempt
-        };
+        const fallbackError = lastError ?? "Exceeded retry attempts for monday write-back.";
+        logger.error("Exceeded retry attempts for monday upsert", {
+          boardId,
+          attempts: attempt,
+          error: fallbackError
+        });
+        return { itemId: candidateItemId, ok: false, attempts: attempt, error: fallbackError };
       })
     );
 
@@ -450,22 +453,14 @@ export async function writeBackBatchSafe({
       results.push(result);
     }
 
-    const failedThisBatch = batchResults.filter((result) => !result.ok).length;
-    if (failedThisBatch > 0) {
-      logger.warn("Batch completed with monday write-back failures", {
-        boardId,
-        batchNumber,
-        failed: failedThisBatch
-      });
-    }
-
     if (i + batchSize < rows.length) {
       await sleep(delayMs);
     }
   }
 
-  logger.info("Completed monday write-back batches", {
+  logger.info("Completed monday upsert batches", {
     boardId,
+    totalBatches,
     totalSuccess,
     totalFailed
   });
@@ -808,13 +803,32 @@ export async function upsertRowsToBoard({
       columnValues[column.id] = formatted;
     }
 
+    if (keyColumn && resolvedKeyColumn && columnValues[resolvedKeyColumn.id] === undefined) {
+      const keyValueRaw = row[keyColumn];
+      const keyValue = typeof keyValueRaw === "string" ? keyValueRaw.trim() : keyValueRaw;
+      if (keyValue !== undefined && keyValue !== null && String(keyValue).trim().length > 0) {
+        columnValues[resolvedKeyColumn.id] = { text: String(keyValue).trim() };
+      }
+    }
+
+    if (Object.keys(columnValues).length === 0) {
+      logger.warn("Skipping monday write-back row with no mapped values", {
+        boardId,
+        keyColumn,
+        keyValue: keyColumn ? row[keyColumn] : undefined
+      });
+      continue;
+    }
+
     const columnValuesJson = JSON.stringify(columnValues);
 
     const keyValue = keyColumn ? String(row[keyColumn] ?? "").trim() : "";
     const normalizedKey = keyValue.toLowerCase();
     const existingItemId = normalizedKey ? keyMap.get(normalizedKey) : undefined;
     const itemName =
-      (itemNameField && row[itemNameField] ? String(row[itemNameField]) : undefined) ||
+      (itemNameField && row[itemNameField]
+        ? String(row[itemNameField]).trim()
+        : undefined) ||
       keyValue ||
       "Standardized row";
 
