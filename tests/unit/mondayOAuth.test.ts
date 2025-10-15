@@ -92,6 +92,27 @@ describe("verifyMondayJwt", () => {
     });
   });
 
+  it("accepts raw jwt authorization header without scheme", async () => {
+    const { verifyMondayJwt } = await import("@/lib/mondayJwt");
+    const token = jwt.sign(
+      {
+        accountId: 111,
+        userId: 222,
+        aud: expectedAudience,
+        short_lived_token: "sl-immediate"
+      },
+      baseEnv.MONDAY_SIGNING_SECRET,
+      { expiresIn: "5m" }
+    );
+
+    const result = verifyMondayJwt(token);
+    expect(result).toEqual({
+      accountId: "111",
+      userId: "222",
+      shortLivedToken: "sl-immediate"
+    });
+  });
+
   it("throws when the audience does not match", async () => {
     const { verifyMondayJwt } = await import("@/lib/mondayJwt");
     const token = jwt.sign(

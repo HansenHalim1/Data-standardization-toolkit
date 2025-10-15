@@ -24,11 +24,13 @@ type VerifiedIntegrationContext = {
 };
 
 export function verifyMondayJwt(authHeader: string): VerifiedIntegrationContext {
-  if (!authHeader?.startsWith("Bearer ")) {
+  if (!authHeader) {
     throw new UnauthorizedError("Missing monday integration Authorization header");
   }
 
-  const token = authHeader.slice("Bearer ".length).trim();
+  const token = authHeader.startsWith("Bearer ")
+    ? authHeader.slice("Bearer ".length).trim()
+    : authHeader.trim();
   if (!token) {
     throw new UnauthorizedError("Empty monday integration token");
   }

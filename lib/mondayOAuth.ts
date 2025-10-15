@@ -77,18 +77,18 @@ export function getAuthorizeUrl({ state, subdomain, scopes, includeForceInstall 
 
 export async function exchangeCodeForToken(code: string): Promise<MondayTokenResponse> {
   const configuration = env();
+  const formBody = new URLSearchParams({
+    client_id: configuration.monday.clientId,
+    client_secret: configuration.monday.clientSecret,
+    redirect_uri: configuration.public.mondayRedirectUri,
+    code
+  });
   const response = await fetch(MONDAY_TOKEN_URL, {
     method: "POST",
     headers: {
-      "Content-Type": "application/json"
+      "Content-Type": "application/x-www-form-urlencoded"
     },
-    body: JSON.stringify({
-      code,
-      client_id: configuration.monday.clientId,
-      client_secret: configuration.monday.clientSecret,
-      redirect_uri: configuration.public.mondayRedirectUri,
-      grant_type: "authorization_code"
-    })
+    body: formBody
   });
 
   const payload = (await response.json().catch(() => null)) as Partial<MondayTokenResponse> & {
