@@ -492,11 +492,43 @@ export async function upsertRowsToBoard({
 }): Promise<void> {
   const client = getApiClient({ accessToken });
   const boardData = await fetchBoardData(accessToken, boardId);
-  const columnTypes = new Map(boardData.columns.map((column) => [column.id, column.type]));
+  const columnsById = new Map(boardData.columns.map((column) => [column.id, column]));
+  const columnsByName = new Map(
+    boardData.columns.map((column) => [normalizeColumnKey(column.title), column])
+  );
+  const resolveColumn = (identifier: string | undefined): Column | undefined => {
+    if (!identifier) {
+      return undefined;
+    }
+    const direct = columnsById.get(identifier);
+    if (direct) {
+      return direct;
+    }
+    const normalized = normalizeColumnKey(identifier);
+    return columnsByName.get(normalized);
+  };
+
+  const resolvedMapping = new Map<string, Column>();
+  for (const [field, target] of Object.entries(columnMapping)) {
+    const column = resolveColumn(target);
+    if (!column) {
+      logger.warn("Unknown monday column mapping", { boardId, field, target });
+      continue;
+    }
+    resolvedMapping.set(field, column);
+  }
+
+  if (resolvedMapping.size === 0) {
+    throw new Error("No valid monday column mappings were resolved for write-back.");
+  }
+
+  const resolvedKeyColumn = resolveColumn(
+    keyColumnId ?? (keyColumn ? columnMapping[keyColumn] : undefined)
+  );
   const keyMap = new Map<string, string>();
-  if (keyColumn && keyColumnId) {
+  if (keyColumn && resolvedKeyColumn) {
     for (const item of boardData.items) {
-      const keyValue = item.column_values?.find((value) => value.id === keyColumnId)?.text;
+      const keyValue = item.column_values?.find((value) => value.id === resolvedKeyColumn.id)?.text;
       if (keyValue) {
         keyMap.set(keyValue.trim().toLowerCase(), item.id);
       }
@@ -505,13 +537,13 @@ export async function upsertRowsToBoard({
 
   for (const row of rows) {
     const columnValues: Record<string, unknown> = {};
-    for (const [field, columnId] of Object.entries(columnMapping)) {
+    for (const [field, column] of resolvedMapping) {
       const value = row[field];
-      const formatted = formatColumnValue(value, columnTypes.get(columnId));
+      const formatted = formatColumnValue(value, column.type);
       if (formatted === null) {
         continue;
       }
-      columnValues[columnId] = formatted;
+      columnValues[column.id] = formatted;
     }
 
     const columnValuesJson = JSON.stringify(columnValues);
