@@ -73,6 +73,10 @@ type StandardizationTarget = {
   label: string;
 };
 
+function normalizeKey(value: string | null | undefined): string {
+  return value ? value.toString().trim().toLowerCase().replace(/[^a-z0-9]/g, "") : "";
+}
+
 function deriveSplitNameFields(field: string): { first: string; last: string } {
   const defaults = { first: "first_name", last: "last_name" };
   if (!field) {
@@ -479,6 +483,86 @@ function computeStandardizationTargets({
   return targets;
 }
 
+function autoMapBoardColumns(
+  recipe: RecipeDefinition,
+  boardColumns: Record<string, string>
+): RecipeDefinition {
+  const writeStep = recipe.steps.find(
+    (step): step is WriteBackStep => step.type === "write_back"
+  );
+  if (!writeStep) {
+    return recipe;
+  }
+
+  const existingMapping = { ...(writeStep.config.columnMapping ?? {}) };
+  const existingTargets = new Set(Object.keys(existingMapping));
+  const normalizedColumns = new Map<string, string>();
+
+  for (const [columnId, title] of Object.entries(boardColumns)) {
+    if (!columnId) {
+      continue;
+    }
+    const normalizedTitle = normalizeKey(title);
+    if (normalizedTitle) {
+      normalizedColumns.set(normalizedTitle, columnId);
+    }
+    const normalizedLabel = normalizeKey(formatFieldLabel(title ?? columnId));
+    if (normalizedLabel) {
+      normalizedColumns.set(normalizedLabel, columnId);
+    }
+    normalizedColumns.set(normalizeKey(columnId), columnId);
+  }
+
+  if (normalizedColumns.size === 0) {
+    return recipe;
+  }
+
+  const mapStep = recipe.steps.find(
+    (step): step is MapColumnsStep => step.type === "map_columns"
+  );
+  const candidates = new Set(getRecipeTargetFields(recipe));
+  if (mapStep?.config?.mapping) {
+    for (const target of Object.values(mapStep.config.mapping)) {
+      if (target) {
+        candidates.add(target);
+      }
+    }
+  }
+
+  const nextMapping = { ...existingMapping };
+  for (const field of candidates) {
+    if (!field || existingTargets.has(field)) {
+      continue;
+    }
+    const normalizedField = normalizeKey(field);
+    const normalizedLabel = normalizeKey(formatFieldLabel(field));
+    const normalizedSpaced = normalizeKey(field.replace(/[_]+/g, " "));
+
+    const match =
+      normalizedColumns.get(normalizedField) ??
+      normalizedColumns.get(normalizedLabel) ??
+      normalizedColumns.get(normalizedSpaced);
+
+    if (match) {
+      nextMapping[field] = match;
+      existingTargets.add(field);
+    }
+  }
+
+  if (Object.keys(nextMapping).length > Object.keys(existingMapping).length) {
+    writeStep.config.columnMapping = nextMapping;
+  }
+
+  if (writeStep.config.keyColumn && !writeStep.config.keyColumnId && writeStep.config.columnMapping) {
+    const keyId = writeStep.config.columnMapping[writeStep.config.keyColumn];
+    if (keyId) {
+      writeStep.config.keyColumnId = keyId;
+    }
+  }
+
+  return recipe;
+}
+
 async function extractColumnsFromFile(file: File): Promise<string[] | null> {
   const lowerName = file.name.toLowerCase();
   const isCsv = lowerName.endsWith(".csv");
@@ -644,9 +728,10 @@ export default function BoardViewClient() {
       }
 
       formatStep.config.operations = [...preservedOperations, ...newOperations];
-      return cloned;
+
+      return autoMapBoardColumns(cloned, boardColumnNames);
     },
-    [selectedRecipe, standardizationSelections, standardizationTargets]
+    [selectedRecipe, standardizationSelections, standardizationTargets, boardColumnNames]
   );
 
   const toggleStandardization = useCallback(
@@ -686,8 +771,10 @@ export default function BoardViewClient() {
 
   const applyPreparedRecipe = useCallback(
     (recipe: RecipeDefinition | null) => {
-      setPreparedRecipe(recipe);
-      const baseRecipe = recipe ?? selectedRecipe;
+      const mappedRecipe =
+        recipe ? autoMapBoardColumns(JSON.parse(JSON.stringify(recipe)) as RecipeDefinition, boardColumnNames) : null;
+      setPreparedRecipe(mappedRecipe);
+      const baseRecipe = mappedRecipe ?? selectedRecipe;
       if (baseRecipe) {
         const derivedSelections = deriveStandardizationSelectionsFromRecipe(baseRecipe);
         const fields = new Set(getRecipeTargetFields(baseRecipe));
@@ -741,7 +828,7 @@ export default function BoardViewClient() {
         setStandardizationSelections((prev) => (Object.keys(prev).length === 0 ? prev : {}));
       }
 
-      if (!recipe) {
+      if (!mappedRecipe) {
         setWriteBoardError(null);
         return;
       }
