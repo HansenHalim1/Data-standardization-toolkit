@@ -1,7 +1,7 @@
 'use client';
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import mondaySdk from "monday-sdk-js";
 import type {
   FormatStep,
@@ -486,17 +486,18 @@ function computeStandardizationTargets({
 function autoMapBoardColumns(
   recipe: RecipeDefinition,
   boardColumns: Record<string, string>
-): RecipeDefinition {
+): { recipe: RecipeDefinition; missingFields: string[] } {
   const writeStep = recipe.steps.find(
     (step): step is WriteBackStep => step.type === "write_back"
   );
   if (!writeStep) {
-    return recipe;
+    return { recipe, missingFields: [] };
   }
 
   const existingMapping = { ...(writeStep.config.columnMapping ?? {}) };
   const existingTargets = new Set(Object.keys(existingMapping));
   const normalizedColumns = new Map<string, string>();
+  const missingFields: string[] = [];
 
   for (const [columnId, title] of Object.entries(boardColumns)) {
     if (!columnId) {
@@ -514,7 +515,7 @@ function autoMapBoardColumns(
   }
 
   if (normalizedColumns.size === 0) {
-    return recipe;
+    return { recipe, missingFields: [] };
   }
 
   const mapStep = recipe.steps.find(
@@ -546,6 +547,8 @@ function autoMapBoardColumns(
     if (match) {
       nextMapping[field] = match;
       existingTargets.add(field);
+    } else {
+      missingFields.push(field);
     }
   }
 
@@ -560,7 +563,7 @@ function autoMapBoardColumns(
     }
   }
 
-  return recipe;
+  return { recipe, missingFields: Array.from(new Set(missingFields)) };
 }
 
 async function extractColumnsFromFile(file: File): Promise<string[] | null> {
@@ -635,6 +638,8 @@ export default function BoardViewClient() {
   const [standardizationSelections, setStandardizationSelections] = useState<Record<string, string[]>>({});
   const [boardColumnNames, setBoardColumnNames] = useState<Record<string, string>>({});
   const [fileColumns, setFileColumns] = useState<string[]>([]);
+  const [unmappedBoardFields, setUnmappedBoardFields] = useState<string[]>([]);
+  const unmappedFieldsRef = useRef<string[]>([]);
 
   const mondayClient = useMemo(() => {
     if (typeof window === "undefined") {
@@ -655,6 +660,10 @@ export default function BoardViewClient() {
       }),
     [preparedRecipe, selectedRecipe, boardColumnNames, fileColumns, dataSource]
   );
+
+  useEffect(() => {
+    unmappedFieldsRef.current = unmappedBoardFields;
+  }, [unmappedBoardFields]);
 
   useEffect(() => {
     setStandardizationSelections((prev) => {
@@ -729,9 +738,15 @@ export default function BoardViewClient() {
 
       formatStep.config.operations = [...preservedOperations, ...newOperations];
 
-      return autoMapBoardColumns(cloned, boardColumnNames);
+      if (dataSource !== "board" || Object.keys(boardColumnNames).length === 0) {
+        setUnmappedBoardFields([]);
+        return cloned;
+      }
+      const { recipe: mappedRecipe, missingFields } = autoMapBoardColumns(cloned, boardColumnNames);
+      setUnmappedBoardFields(missingFields);
+      return mappedRecipe;
     },
-    [selectedRecipe, standardizationSelections, standardizationTargets, boardColumnNames]
+    [selectedRecipe, standardizationSelections, standardizationTargets, boardColumnNames, dataSource]
   );
 
   const toggleStandardization = useCallback(
@@ -771,10 +786,21 @@ export default function BoardViewClient() {
 
   const applyPreparedRecipe = useCallback(
     (recipe: RecipeDefinition | null) => {
-      const mappedRecipe =
-        recipe ? autoMapBoardColumns(JSON.parse(JSON.stringify(recipe)) as RecipeDefinition, boardColumnNames) : null;
-      setPreparedRecipe(mappedRecipe);
-      const baseRecipe = mappedRecipe ?? selectedRecipe;
+      let nextRecipe: RecipeDefinition | null = null;
+      let missingFields: string[] = [];
+      if (recipe) {
+        const cloned = JSON.parse(JSON.stringify(recipe)) as RecipeDefinition;
+        if (dataSource === "board" && Object.keys(boardColumnNames).length > 0) {
+          const result = autoMapBoardColumns(cloned, boardColumnNames);
+          nextRecipe = result.recipe;
+          missingFields = result.missingFields;
+        } else {
+          nextRecipe = cloned;
+        }
+      }
+      setPreparedRecipe(nextRecipe);
+      setUnmappedBoardFields(missingFields);
+      const baseRecipe = nextRecipe ?? selectedRecipe;
       if (baseRecipe) {
         const derivedSelections = deriveStandardizationSelectionsFromRecipe(baseRecipe);
         const fields = new Set(getRecipeTargetFields(baseRecipe));
@@ -828,7 +854,7 @@ export default function BoardViewClient() {
         setStandardizationSelections((prev) => (Object.keys(prev).length === 0 ? prev : {}));
       }
 
-      if (!mappedRecipe) {
+      if (!nextRecipe) {
         setWriteBoardError(null);
         return;
       }
@@ -1045,6 +1071,27 @@ export default function BoardViewClient() {
     ]
   );
 
+  const ensureBoardColumns = useCallback(async () => {
+    if (!writeBoardId) {
+      setToast({ message: "Select a board to update columns.", variant: "error" });
+      return;
+    }
+    setToast({ message: "Syncing missing columns with monday...", variant: "default" });
+    await handleWriteBoardSelect(writeBoardId);
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
+    const remaining = unmappedFieldsRef.current;
+    if (remaining.length === 0) {
+      setToast({ message: "Board columns updated from monday.", variant: "success" });
+    } else {
+      setToast({
+        message: `Still missing: ${remaining.map((field) => formatFieldLabel(field)).join(", ")}`,
+        variant: "error"
+      });
+    }
+  }, [handleWriteBoardSelect, writeBoardId]);
+
   const handleCreateBoard = useCallback(async () => {
     const trimmedName = newBoardName.trim();
     if (!trimmedName) {
@@ -1178,6 +1225,18 @@ export default function BoardViewClient() {
       cancelled = true;
     };
   }, [mondayClient, getSessionToken]);
+
+  useEffect(() => {
+    if (dataSource !== "board") {
+      setUnmappedBoardFields([]);
+    }
+  }, [dataSource]);
+
+  useEffect(() => {
+    if (!writeBoardId) {
+      setUnmappedBoardFields([]);
+    }
+  }, [writeBoardId]);
 
   const canPreview =
     Boolean(context) &&
@@ -1635,6 +1694,40 @@ useEffect(() => {
                 </div>
                 {isPreparingWriteBoard && (
                   <p className="text-xs text-muted-foreground">Preparing board mapping…</p>
+                )}
+                {unmappedBoardFields.length > 0 && dataSource === "board" && (
+                  <div className="rounded-md border border-dashed border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                    <p className="font-medium">Create missing monday columns?</p>
+                    <p className="mt-1">
+                      We couldn’t find columns for{" "}
+                      <span className="font-semibold">
+                        {unmappedBoardFields.map((field) => formatFieldLabel(field)).join(", ")}
+                      </span>
+                      . Would you like us to create them automatically?
+                    </p>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        onClick={() => {
+                          void ensureBoardColumns();
+                        }}
+                        disabled={isPreparingWriteBoard}
+                      >
+                        Create columns
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => setUnmappedBoardFields([])}
+                        disabled={isPreparingWriteBoard}
+                      >
+                        Not now
+                      </Button>
+                    </div>
+                  </div>
                 )}
                 {writeBoardError && <p className="text-xs text-destructive">{writeBoardError}</p>}
                 {writeBoardId && writeBoardName && !writeBoardError && !isPreparingWriteBoard && (
