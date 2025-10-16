@@ -1281,18 +1281,33 @@ async function parseCsvFileToRows(file: File): Promise<Record<string, unknown>[]
       setWriteBoardError(null);
       const sessionToken = await getSessionToken();
       const recipeForBoard = buildRecipeWithStandardization(preparedRecipe ?? BLANK_RECIPE);
-      const response = await fetch("/api/monday/boards", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${sessionToken}`
-        },
-        body: JSON.stringify({
+        // If the user intends to seed from the original CSV, try to extract header columns
+        // and include them in the create-board request so the server can create matching columns.
+        const payload: any = {
           name: trimmedName,
           boardKind: DEFAULT_BOARD_KIND,
           recipe: recipeForBoard
-        })
-      });
+        };
+        if (seedSourceMode === "original" && uploadedFile) {
+          try {
+            const extracted = await extractColumnsFromFile(uploadedFile);
+            if (extracted && extracted.length > 0) {
+              payload.columns = extracted;
+            }
+          } catch (err) {
+            // non-fatal: continue without columns
+            console.warn("Failed to extract CSV headers for board creation:", err);
+          }
+        }
+
+        const response = await fetch("/api/monday/boards", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${sessionToken}`
+          },
+          body: JSON.stringify(payload)
+        });
       if (!response.ok) {
         throw new Error(await response.text());
       }
