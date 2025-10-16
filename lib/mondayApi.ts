@@ -149,10 +149,10 @@ function formatColumnValue(rawValue: unknown, columnType?: string): unknown | nu
       const dateValue = normalizeDateValue(normalized);
       return dateValue ? { date: dateValue } : null;
     }
+    case "text":
     default:
-      return {
-        text: normalized
-      };
+      // Text columns should be plain strings for Monday's API
+      return normalized;
   }
 }
 
