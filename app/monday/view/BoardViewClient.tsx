@@ -33,15 +33,6 @@ type MondayContext = {
   };
 };
 
-type Template = {
-  id: string;
-  name: string;
-  description: string;
-  recipe: RecipeDefinition | null;
-  premium?: boolean;
-};
-
-const CUSTOM_TEMPLATE_ID = "custom";
 const DEFAULT_BOARD_KIND = "share";
 
 const BLANK_RECIPE: RecipeDefinition = {
@@ -65,196 +56,6 @@ const BLANK_RECIPE: RecipeDefinition = {
   ]
 };
 
-const templates: Template[] = [
-  {
-    id: CUSTOM_TEMPLATE_ID,
-    name: "Start from scratch",
-    description: "Begin with an empty recipe and configure your own workflow later.",
-    recipe: null
-  },
-  {
-    id: "crm",
-    name: "CRM Contacts",
-    description: "Clean and normalize contact details for CRM funnels.",
-    recipe: {
-      id: "crm",
-      name: "CRM Contacts",
-      version: 1,
-      steps: [
-        {
-          type: "map_columns",
-          config: {
-            mapping: {
-              FirstName: "first_name",
-              LastName: "last_name",
-              Email: "email",
-              Phone: "phone",
-              Company: "company",
-              Country: "country"
-            }
-          }
-        },
-        {
-          type: "format",
-          config: {
-            operations: [
-              { field: "first_name", op: { kind: "title_case" } },
-              { field: "last_name", op: { kind: "title_case" } },
-              { field: "email", op: { kind: "email_normalize" } },
-              { field: "phone", op: { kind: "phone_e164", defaultCountry: "US" } },
-              { field: "country", op: { kind: "iso_country" } }
-            ]
-          }
-        },
-        {
-          type: "validate",
-          config: {
-            rules: [
-              { kind: "required", field: "email" },
-              { kind: "regex", field: "email", pattern: "^[^@]+@[^@]+\\.[^@]+$" },
-              { kind: "required", field: "first_name" }
-            ]
-          }
-        },
-        {
-          type: "dedupe",
-          config: {
-            keys: ["email"],
-            fuzzy: {
-              enabled: true,
-              threshold: 0.92
-            }
-          }
-        },
-        {
-          type: "write_back",
-          config: {
-            strategy: "monday_upsert",
-            keyColumn: "email"
-          }
-        }
-      ]
-    },
-    premium: true
-  },
-  {
-    id: "hr",
-    name: "HR Roster",
-    description: "Standardize employee rosters with compliance checks.",
-    recipe: {
-      id: "hr",
-      name: "HR Roster",
-      version: 1,
-      steps: [
-        {
-          type: "map_columns",
-          config: {
-            mapping: {
-              "Employee Name": "full_name",
-              Email: "email",
-              "Start Date": "start_date",
-              Department: "department",
-              Country: "country"
-            }
-          }
-        },
-        {
-          type: "format",
-          config: {
-            operations: [
-              { field: "full_name", op: { kind: "title_case" } },
-              { field: "email", op: { kind: "email_normalize" } },
-              { field: "start_date", op: { kind: "date_parse", outputFormat: "yyyy-MM-dd" } },
-              { field: "country", op: { kind: "iso_country" } }
-            ]
-          }
-        },
-        {
-          type: "validate",
-          config: {
-            rules: [
-              { kind: "required", field: "full_name" },
-              { kind: "required", field: "start_date" },
-              { kind: "in_set", field: "department", values: ["Finance", "HR", "Sales", "Engineering"] }
-            ]
-          }
-        },
-        {
-          type: "dedupe",
-          config: {
-            keys: ["email"]
-          }
-        },
-        {
-          type: "write_back",
-          config: {
-            strategy: "monday_upsert",
-            keyColumn: "email"
-          }
-        }
-      ]
-    }
-  },
-  {
-    id: "orders",
-    name: "Orders",
-    description: "Normalize order feeds and currency values.",
-    recipe: {
-      id: "orders",
-      name: "Orders",
-      version: 1,
-      steps: [
-        {
-          type: "map_columns",
-          config: {
-            mapping: {
-              "Order ID": "order_id",
-              Amount: "amount",
-              Currency: "currency",
-              "Order Date": "order_date",
-              "Customer Email": "email"
-            }
-          }
-        },
-        {
-          type: "format",
-          config: {
-            operations: [
-              { field: "amount", op: { kind: "number_parse", locale: "en-US" } },
-              { field: "currency", op: { kind: "currency_code" } },
-              { field: "order_date", op: { kind: "date_parse", outputFormat: "yyyy-MM-dd" } },
-              { field: "email", op: { kind: "email_normalize" } }
-            ]
-          }
-        },
-        {
-          type: "validate",
-          config: {
-            rules: [
-              { kind: "required", field: "order_id" },
-              { kind: "required", field: "amount" },
-              { kind: "required", field: "currency" }
-            ]
-          }
-        },
-        {
-          type: "dedupe",
-          config: {
-            keys: ["order_id"]
-          }
-        },
-        {
-          type: "write_back",
-          config: {
-            strategy: "monday_upsert",
-            keyColumn: "order_id",
-            keyColumnId: "text_mkwrgn66"
-          }
-        }
-      ]
-    }
-  }
-];
 
 type FormatOperation = FormatStep["config"]["operations"][number];
 type OperationConfig = FormatOperation["op"];
@@ -550,8 +351,6 @@ async function extractColumnsFromFile(file: File): Promise<string[] | null> {
   }
 }
 
-const DEFAULT_TEMPLATE_ID = CUSTOM_TEMPLATE_ID;
-
 type DataSource = "file" | "board";
 
 type MondayBoardOption = {
@@ -574,7 +373,6 @@ type PreviewResponse = RecipePreviewResult & {
 export default function BoardViewClient() {
   const [context, setContext] = useState<MondayContext | null>(null);
   const [contextError, setContextError] = useState<string | null>(null);
-  const [selectedTemplateId, setSelectedTemplateId] = useState<string>(DEFAULT_TEMPLATE_ID);
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<PreviewResponse | null>(null);
   const [preparedRecipe, setPreparedRecipe] = useState<RecipeDefinition | null>(null);
@@ -607,22 +405,12 @@ export default function BoardViewClient() {
     return mondaySdk();
   }, []);
 
-  const selectedTemplate = useMemo(
-    () => templates.find((template) => template.id === selectedTemplateId) ?? templates[0],
-    [selectedTemplateId]
-  );
-
-  const isBlankSelection = selectedTemplate?.recipe == null;
-
-  const selectedRecipe = useMemo(
-    () => selectedTemplate?.recipe ?? BLANK_RECIPE,
-    [selectedTemplate]
-  );
+  const selectedRecipe = BLANK_RECIPE;
 
   const standardizationTargets = useMemo(
     () =>
       computeStandardizationTargets({
-        recipe: preparedRecipe ?? selectedRecipe,
+        recipe: preparedRecipe ?? BLANK_RECIPE,
         boardColumns: boardColumnNames,
         fileColumns,
         dataSource
@@ -795,7 +583,7 @@ export default function BoardViewClient() {
         return "skipped" as const;
       }
 
-      const baseRecipe = prepared ?? preparedRecipe ?? selectedRecipe;
+      const baseRecipe = prepared ?? preparedRecipe ?? BLANK_RECIPE;
       if (!baseRecipe) {
         return "skipped" as const;
       }
@@ -943,7 +731,7 @@ export default function BoardViewClient() {
             Authorization: `Bearer ${sessionToken}`
           },
           body: JSON.stringify({
-            recipe: buildRecipeWithStandardization(preparedRecipe ?? selectedRecipe)
+            recipe: buildRecipeWithStandardization(preparedRecipe ?? BLANK_RECIPE)
           })
         });
         if (!response.ok) {
@@ -986,10 +774,6 @@ export default function BoardViewClient() {
   );
 
   const handleCreateBoard = useCallback(async () => {
-    if (!selectedTemplate) {
-      setWriteBoardError("Select a template before creating a board.");
-      return;
-    }
     const trimmedName = newBoardName.trim();
     if (!trimmedName) {
       setWriteBoardError("Enter a name for the new board.");
@@ -1001,7 +785,7 @@ export default function BoardViewClient() {
       setBoardsError(null);
       setWriteBoardError(null);
       const sessionToken = await getSessionToken();
-      const recipeForBoard = buildRecipeWithStandardization(preparedRecipe ?? selectedRecipe);
+      const recipeForBoard = buildRecipeWithStandardization(preparedRecipe ?? BLANK_RECIPE);
       const response = await fetch("/api/monday/boards", {
         method: "POST",
         headers: {
@@ -1069,8 +853,7 @@ export default function BoardViewClient() {
     preparedRecipe,
     buildRecipeWithStandardization,
     seedBoardWithPreview,
-    selectedRecipe,
-    selectedTemplate
+    selectedRecipe
   ]);
 
   useEffect(() => {
@@ -1124,11 +907,8 @@ export default function BoardViewClient() {
     };
   }, [mondayClient, getSessionToken]);
 
-  const planAllowsFuzzy = context?.flags.fuzzyMatching ?? false;
-  const needsPremium = context ? !!selectedTemplate?.premium && !planAllowsFuzzy : false;
   const canPreview =
     Boolean(context) &&
-    !needsPremium &&
     !isPreviewing &&
     ((dataSource === "file" && Boolean(uploadedFile)) || (dataSource === "board" && Boolean(selectedBoardId)));
 
@@ -1181,26 +961,6 @@ export default function BoardViewClient() {
   }, [applyPreparedRecipe, dataSource]);
 
   useEffect(() => {
-    setPreview(null);
-    applyPreparedRecipe(null);
-    setSourceBoard(null);
-    setWriteBoardId("");
-    setWriteBoardName("");
-    setNewBoardName("");
-  }, [applyPreparedRecipe, selectedTemplateId]);
-
-  useEffect(() => {
-    if (dataSource === "board") {
-      setPreview(null);
-      applyPreparedRecipe(null);
-      setSourceBoard(null);
-      setWriteBoardId("");
-      setWriteBoardName("");
-      setBoardColumnNames({});
-    }
-  }, [applyPreparedRecipe, dataSource, selectedBoardId]);
-
-  useEffect(() => {
     if (!writeBoardId) {
       return;
     }
@@ -1209,23 +969,6 @@ export default function BoardViewClient() {
       setWriteBoardName(matching.name);
     }
   }, [boards, writeBoardId, writeBoardName]);
-
-  useEffect(() => {
-    if (!context) {
-      return;
-    }
-    if (!needsPremium) {
-      return;
-    }
-    const fallback = templates.find((template) => !template.premium);
-    if (fallback && fallback.id !== selectedTemplateId) {
-      setSelectedTemplateId(fallback.id);
-      setToast({
-        message: `${selectedTemplate?.name ?? "This template"} requires an upgraded plan. Switched to ${fallback.name}.`,
-        variant: "default"
-      });
-    }
-  }, [context, needsPremium, selectedTemplate?.name, selectedTemplateId]);
 
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-8 px-4 py-10">
@@ -1350,7 +1093,7 @@ export default function BoardViewClient() {
             <Button
               disabled={!canPreview}
               onClick={() => {
-                if (!context || !selectedTemplate) return;
+                if (!context) return;
                 if (dataSource === "board") {
                   if (!selectedBoardId) {
                     setToast({ message: "Select a board to preview.", variant: "error" });
@@ -1367,7 +1110,7 @@ export default function BoardViewClient() {
                         },
                         body: JSON.stringify({
                           source: { type: "board", boardId: selectedBoardId },
-                          recipe: buildRecipeWithStandardization(preparedRecipe ?? selectedRecipe),
+                          recipe: buildRecipeWithStandardization(preparedRecipe ?? BLANK_RECIPE),
                           plan: context.plan
                         })
                       });
@@ -1427,7 +1170,7 @@ export default function BoardViewClient() {
                     formData.set("tenantId", context.tenantId);
                     formData.set(
                       "recipe",
-                      JSON.stringify(buildRecipeWithStandardization(preparedRecipe ?? selectedRecipe))
+                      JSON.stringify(buildRecipeWithStandardization(preparedRecipe ?? BLANK_RECIPE))
                     );
                     formData.set("plan", context.plan);
                     const response = await fetch("/api/recipes/run/preview", {
@@ -1474,38 +1217,7 @@ export default function BoardViewClient() {
 
         <Card>
           <CardHeader>
-            <CardTitle>2. Choose a template (optional)</CardTitle>
-            <CardDescription>
-              Templates are starting points. Leave the default selection to build your own recipe later in the dashboard.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <Label htmlFor="template">Template</Label>
-            <Select
-              id="template"
-              value={selectedTemplateId}
-              onChange={(event) => setSelectedTemplateId(event.target.value)}
-            >
-              {templates.map((template) => (
-                <option key={template.id} value={template.id}>
-                  {template.name}
-                  {template.premium ? " (Premium)" : ""}
-                </option>
-              ))}
-            </Select>
-            <p className="text-xs text-muted-foreground">{selectedTemplate?.description}</p>
-            {needsPremium && (
-              <p className="text-xs text-destructive">
-                {selectedTemplate?.name} requires an upgraded plan with fuzzy deduplication. Choose another template or
-                upgrade to unlock it.
-              </p>
-            )}
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>3. Configure standardization</CardTitle>
+            <CardTitle>2. Configure standardization</CardTitle>
             <CardDescription>
               Choose how each column should be cleaned before previewing or writing back.
             </CardDescription>
@@ -1513,7 +1225,7 @@ export default function BoardViewClient() {
           <CardContent className="space-y-4">
             {standardizationTargets.length === 0 ? (
               <p className="text-sm text-muted-foreground">
-                Load a data source or template mapping to enable standardization options.
+                Load a data source to enable standardization options.
               </p>
             ) : (
               <div className="space-y-4">
@@ -1558,7 +1270,7 @@ export default function BoardViewClient() {
         </Card>
       </section>
       <PlanGate
-        allowed={!needsPremium}
+        allowed
         plan={context?.plan ?? "free"}
         feature="fuzzy deduplication"
         onUpgrade={() => setToast({ message: "Upgrade to unlock fuzzy dedupe.", variant: "default" })}
@@ -1655,7 +1367,7 @@ export default function BoardViewClient() {
                 variant="secondary"
                 disabled={!preview || !context || isExecuting || !writeBoardId || isPreparingWriteBoard}
                 onClick={() => {
-                  if (!preview || !context || !selectedTemplate) return;
+                  if (!preview || !context) return;
                   if (!writeBoardId) {
                     setToast({ message: "Select a board to write to before running.", variant: "error" });
                     return;
@@ -1663,7 +1375,7 @@ export default function BoardViewClient() {
                   startExecute(async () => {
                     try {
                       const sessionToken = await getSessionToken();
-                      const baseRecipe = preparedRecipe ?? selectedRecipe;
+                      const baseRecipe = preparedRecipe ?? BLANK_RECIPE;
                       const recipeForExecution = buildRecipeWithStandardization(baseRecipe);
                       const writeStep = recipeForExecution.steps.find(
                         (step): step is WriteBackStep => step.type === "write_back"
