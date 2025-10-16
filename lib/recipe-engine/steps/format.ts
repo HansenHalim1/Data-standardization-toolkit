@@ -17,6 +17,7 @@ type FormatOperation =
   | { kind: "timezone_to_utc" }
   | { kind: "slugify"; separator?: string }
   | { kind: "round_numeric"; precision?: number }
+  | { kind: "round_to_currency" }
   | { kind: "normalize_percentage" }
   | { kind: "remove_special_characters" }
   | {
@@ -182,13 +183,25 @@ function applyOperation(
       recordDiff(diff, rowIndex, field, value, formatted);
       return formatted;
     }
-    case "round_numeric": {
-      const formatted = roundNumericValue(value, op.precision ?? 2);
-      if (formatted === undefined) {
+    case "round_numeric":
+    case "round_to_currency": {
+      // For currency op, always enforce two decimal places
+      const precision = op.kind === "round_to_currency" ? 2 : (op.precision ?? 0);
+
+      if (value == null || value === "") {
         return value;
       }
-      recordDiff(diff, rowIndex, field, value, formatted);
-      return formatted;
+
+      const roundedNum = roundNumericValue(value, precision);
+      if (roundedNum === undefined) {
+        return value;
+      }
+
+      // For currency, return a string with exactly two decimals; otherwise return a number
+      const finalValue = op.kind === "round_to_currency" ? roundedNum.toFixed(2) : roundedNum;
+
+      recordDiff(diff, rowIndex, field, value, finalValue);
+      return finalValue;
     }
     case "normalize_percentage": {
       const formatted = normalizePercentageValue(value);

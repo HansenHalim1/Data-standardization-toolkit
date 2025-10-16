@@ -47,6 +47,7 @@ export type FormatStep = {
         | { kind: "timezone_to_utc" }
         | { kind: "slugify"; separator?: string }
         | { kind: "round_numeric"; precision?: number }
+  | { kind: "round_to_currency" }
         | { kind: "normalize_percentage" }
         | { kind: "remove_special_characters" }
         | {
