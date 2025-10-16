@@ -1326,9 +1326,18 @@ useEffect(() => {
       );
       if (!write) return clone;
 
-      const normalize = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+      // Helper: clean up column names for comparison
+      const normalize = (s: string) =>
+        s
+          .toLowerCase()
+          .normalize("NFKD") // remove weird unicode spaces
+          .replace(/[^a-z0-9]/g, "");
+
+      // Use human-friendly titles for board source; file headers for file source
       const allTargets =
-        fileColumns.length > 0 ? fileColumns : Object.keys(boardColumnNames);
+        dataSource === "board"
+          ? Object.values(boardColumnNames)
+          : fileColumns;
 
       // Go through all unmapped fields
       for (const sourceField of allTargets) {
@@ -1336,9 +1345,21 @@ useEffect(() => {
         if (alreadyMapped) continue;
 
         const normalizedSource = normalize(sourceField);
+
+        // Fuzzy match: tolerate minor differences
         const autoMatch = Object.entries(boardColumnNames).find(
-          ([, name]) => normalize(name) === normalizedSource
+          ([, name]) => {
+            const normalizedName = normalize(name);
+            return (
+              normalizedName === normalizedSource ||
+              normalizedName.startsWith(normalizedSource) ||
+              normalizedSource.startsWith(normalizedName) ||
+              normalizedName.includes(normalizedSource) ||
+              normalizedSource.includes(normalizedName)
+            );
+          }
         );
+
         if (autoMatch) {
           const [autoId] = autoMatch;
           write.config.columnMapping = {
@@ -1347,9 +1368,10 @@ useEffect(() => {
           };
         }
       }
+
       return clone;
     });
-  }, [preparedRecipe, boardColumnNames, fileColumns]);
+  }, [boardColumnNames, fileColumns, dataSource]);
 
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-8 px-4 py-10">
