@@ -60,7 +60,11 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
       preparedRecipe,
       board: {
         boardId: boardData.boardId,
-        boardName: boardData.boardName
+        boardName: boardData.boardName,
+        columns: boardData.columns.map((column) => ({
+          id: column.id,
+          title: column.title ?? column.id
+        }))
       }
     });
   } catch (error) {

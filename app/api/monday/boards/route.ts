@@ -108,7 +108,11 @@ export async function POST(request: Request) {
         boardName: summary.name,
         workspaceName: summary.workspaceName ?? null,
         workspaceId: summary.workspaceId ?? null,
-        kind: summary.kind ?? null
+        kind: summary.kind ?? null,
+        columns: boardData.columns.map((column) => ({
+          id: column.id,
+          title: column.title ?? column.id
+        }))
       },
       preparedRecipe
     });

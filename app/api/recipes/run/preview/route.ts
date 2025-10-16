@@ -74,6 +74,7 @@ export async function POST(request: Request) {
     let planParam: string | undefined;
     let tableRows: Record<string, unknown>[] = [];
     let sourceBoard: { boardId: string; boardName: string } | null = null;
+    let previewColumns: Array<{ id: string | null; title: string }> = [];
 
     if (contentType.includes("application/json")) {
       const jsonBody = await request.json().catch(() => null);
@@ -106,6 +107,10 @@ export async function POST(request: Request) {
       tableRows = boardItemsToRows(boardData);
       preparedRecipe = prepareRecipeForBoard(recipe, boardData);
       sourceBoard = { boardId: boardData.boardId, boardName: boardData.boardName };
+      previewColumns = boardData.columns.map((column) => ({
+        id: column.id,
+        title: column.title ?? column.id
+      }));
     } else {
       const formData = await request.formData();
       const file = formData.get("file");
@@ -174,6 +179,21 @@ export async function POST(request: Request) {
 
     logger.info("Preview generated", { tenantId: tenant.id, runId, rows: limitedRows.length });
 
+    if (!sourceBoard) {
+      const columnSet = new Set<string>();
+      for (const row of limitedRows) {
+        for (const key of Object.keys(row)) {
+          if (key) {
+            columnSet.add(key);
+          }
+        }
+      }
+      previewColumns = Array.from(columnSet).map((title) => ({
+        id: null,
+        title
+      }));
+    }
+
     const responsePayload: Record<string, unknown> = {
       ...preview,
       runId,
@@ -182,6 +202,10 @@ export async function POST(request: Request) {
 
     if (sourceBoard) {
       responsePayload.sourceBoard = sourceBoard;
+    }
+
+    if (previewColumns.length > 0) {
+      responsePayload.columns = previewColumns;
     }
 
     return NextResponse.json(responsePayload);

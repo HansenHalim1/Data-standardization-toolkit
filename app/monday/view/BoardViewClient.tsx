@@ -267,6 +267,11 @@ type StandardizationRule = {
   matches: (field: string, op: OperationConfig) => boolean;
 };
 
+type StandardizationTarget = {
+  field: string;
+  label: string;
+};
+
 const STANDARDIZATION_RULES: StandardizationRule[] = [
   {
     id: "title_case",
@@ -462,6 +467,89 @@ function selectionMapsEqual(
   return true;
 }
 
+function computeStandardizationTargets({
+  recipe,
+  boardColumns,
+  fileColumns,
+  dataSource
+}: {
+  recipe: RecipeDefinition | null;
+  boardColumns: Record<string, string>;
+  fileColumns: string[];
+  dataSource: DataSource;
+}): StandardizationTarget[] {
+  const targets: StandardizationTarget[] = [];
+  const seen = new Set<string>();
+
+  const addTarget = (field: string, label: string) => {
+    if (!field || seen.has(field)) {
+      return;
+    }
+    targets.push({ field, label });
+    seen.add(field);
+  };
+
+  if (dataSource === "board" && recipe) {
+    const writeStep = recipe.steps.find(
+      (step): step is WriteBackStep => step.type === "write_back"
+    );
+    const columnMapping = writeStep?.config?.columnMapping ?? {};
+    for (const [field, columnId] of Object.entries(columnMapping)) {
+      if (!field) {
+        continue;
+      }
+      const friendlyField = formatFieldLabel(field);
+      const columnName =
+        (columnId ? boardColumns[columnId] : undefined) ??
+        friendlyField;
+      const label =
+        columnName && columnName !== friendlyField
+          ? `${columnName} (${friendlyField})`
+          : columnName ?? friendlyField;
+      addTarget(field, label);
+    }
+  }
+
+  if (dataSource === "file" && fileColumns.length > 0) {
+    for (const column of fileColumns) {
+      addTarget(column, column);
+    }
+  }
+
+  const fallbackFields = getRecipeTargetFields(recipe);
+  for (const field of fallbackFields) {
+    addTarget(field, formatFieldLabel(field));
+  }
+
+  return targets;
+}
+
+async function extractColumnsFromFile(file: File): Promise<string[] | null> {
+  const lowerName = file.name.toLowerCase();
+  const isCsv = lowerName.endsWith(".csv");
+  const isText = file.type.startsWith("text/") || isCsv;
+  if (!isText) {
+    return null;
+  }
+  try {
+    const text = await file.text();
+    const firstLine = text.split(/\r?\n/).find((line) => line.trim().length > 0);
+    if (!firstLine) {
+      return null;
+    }
+    const columns = firstLine
+      .split(",")
+      .map((value) => value.trim())
+      .filter((value) => value.length > 0);
+    if (columns.length === 0) {
+      return null;
+    }
+    return Array.from(new Set(columns));
+  } catch {
+    return null;
+  }
+}
+
 const DEFAULT_TEMPLATE_ID = CUSTOM_TEMPLATE_ID;
 
 type DataSource = "file" | "board";
@@ -480,6 +568,7 @@ type PreviewResponse = RecipePreviewResult & {
     boardId: string;
     boardName: string;
   };
+  columns?: Array<{ id: string | null; title: string }>;
 };
 
 export default function BoardViewClient() {
@@ -508,6 +597,8 @@ export default function BoardViewClient() {
   const [isCreatingBoard, setIsCreatingBoard] = useState(false);
   const [isSeedingBoard, setIsSeedingBoard] = useState(false);
   const [standardizationSelections, setStandardizationSelections] = useState<Record<string, string[]>>({});
+  const [boardColumnNames, setBoardColumnNames] = useState<Record<string, string>>({});
+  const [fileColumns, setFileColumns] = useState<string[]>([]);
 
   const mondayClient = useMemo(() => {
     if (typeof window === "undefined") {
@@ -528,10 +619,40 @@ export default function BoardViewClient() {
     [selectedTemplate]
   );
 
-  const availableFields = useMemo(
-    () => getRecipeTargetFields(preparedRecipe ?? selectedRecipe),
-    [preparedRecipe, selectedRecipe]
+  const standardizationTargets = useMemo(
+    () =>
+      computeStandardizationTargets({
+        recipe: preparedRecipe ?? selectedRecipe,
+        boardColumns: boardColumnNames,
+        fileColumns,
+        dataSource
+      }),
+    [preparedRecipe, selectedRecipe, boardColumnNames, fileColumns, dataSource]
   );
+
+  useEffect(() => {
+    setStandardizationSelections((prev) => {
+      const validFields = new Set(standardizationTargets.map((target) => target.field));
+      let changed = false;
+      const next: Record<string, string[]> = {};
+      for (const [field, rules] of Object.entries(prev)) {
+        if (!validFields.has(field)) {
+          changed = true;
+          continue;
+        }
+        const filtered = rules.filter((ruleId) => STANDARDIZATION_RULES_MAP.has(ruleId));
+        if (filtered.length !== rules.length) {
+          changed = true;
+        }
+        if (filtered.length > 0) {
+          next[field] = filtered;
+        } else {
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [standardizationTargets]);
 
   const buildRecipeWithStandardization = useCallback(
     (baseRecipe: RecipeDefinition | null) => {
@@ -560,14 +681,14 @@ export default function BoardViewClient() {
       }
 
       const existingOperations = [...(formatStep.config.operations ?? [])];
-      const preservedOperations = existingOperations.filter((operation) =>
-        !STANDARDIZATION_RULES.some((rule) => rule.matches(operation.field, operation.op))
+      const preservedOperations = existingOperations.filter(
+        (operation) =>
+          !STANDARDIZATION_RULES.some((rule) => rule.matches(operation.field, operation.op))
       );
 
-      const orderedFields = getRecipeTargetFields(cloned);
       const newOperations: FormatOperation[] = [];
-
-      for (const field of orderedFields) {
+      for (const target of standardizationTargets) {
+        const field = target.field;
         const selectedRuleIds = standardizationSelections[field];
         if (!selectedRuleIds || selectedRuleIds.length === 0) {
           continue;
@@ -583,12 +704,13 @@ export default function BoardViewClient() {
       formatStep.config.operations = [...preservedOperations, ...newOperations];
       return cloned;
     },
-    [selectedRecipe, standardizationSelections]
+    [selectedRecipe, standardizationSelections, standardizationTargets]
   );
 
   const toggleStandardization = useCallback(
     (field: string, ruleId: string) => {
-      if (!availableFields.includes(field) || !STANDARDIZATION_RULES_MAP.has(ruleId)) {
+      const validFields = new Set(standardizationTargets.map((target) => target.field));
+      if (!validFields.has(field) || !STANDARDIZATION_RULES_MAP.has(ruleId)) {
         return;
       }
       setStandardizationSelections((prev) => {
@@ -617,7 +739,7 @@ export default function BoardViewClient() {
         return next;
       });
     },
-    [availableFields]
+    [standardizationTargets]
   );
 
   const applyPreparedRecipe = useCallback(
@@ -650,23 +772,9 @@ export default function BoardViewClient() {
         setWriteBoardError(null);
         return;
       }
-      const writeStep = recipe.steps.find(
-        (step): step is WriteBackStep => step.type === "write_back"
-      );
-      const mapping = writeStep?.config?.columnMapping;
-      if (!mapping || Object.keys(mapping).length === 0) {
-        if (isBlankSelection) {
-          setWriteBoardError(null);
-        } else {
-          setWriteBoardError(
-            "No matching columns found between the template and the selected board. Rename the board columns or adjust the template mapping."
-          );
-        }
-      } else {
-        setWriteBoardError(null);
-      }
+      setWriteBoardError(null);
     },
-    [isBlankSelection, selectedRecipe]
+    [selectedRecipe]
   );
 
   const getSessionToken = useCallback(async () => {
@@ -784,19 +892,37 @@ export default function BoardViewClient() {
   }, [loadBoards, writeBoardId]);
 
   const handleWriteBoardSelect = useCallback(
-    async (boardId: string, options?: { prepared?: RecipeDefinition | null; boardName?: string }) => {
+    async (
+      boardId: string,
+      options?: {
+        prepared?: RecipeDefinition | null;
+        boardName?: string;
+        boardColumns?: Array<{ id: string; title: string }>;
+      }
+    ) => {
       setWriteBoardError(null);
       setWriteBoardId(boardId);
+      setFileColumns([]);
       const board = boards.find((entry) => entry.id === boardId);
       const resolvedName = options?.boardName ?? board?.name ?? "";
       setWriteBoardName(resolvedName);
 
       if (!boardId) {
+        setBoardColumnNames({});
         applyPreparedRecipe(options?.prepared ?? null);
         return;
       }
 
       if (options?.prepared) {
+        if (options.boardColumns) {
+          const mapped = options.boardColumns.reduce<Record<string, string>>((acc, column) => {
+            if (column.id) {
+              acc[column.id] = column.title ?? column.id;
+            }
+            return acc;
+          }, {});
+          setBoardColumnNames(mapped);
+        }
         applyPreparedRecipe(options.prepared);
         return;
       }
@@ -825,8 +951,21 @@ export default function BoardViewClient() {
         }
         const data = (await response.json()) as {
           preparedRecipe: RecipeDefinition;
-          board?: { boardId: string; boardName: string };
+          board?: {
+            boardId: string;
+            boardName: string;
+            columns?: Array<{ id: string; title: string }>;
+          };
         };
+        if (data.board?.columns) {
+          const mapped = data.board.columns.reduce<Record<string, string>>((acc, column) => {
+            if (column.id) {
+              acc[column.id] = column.title ?? column.id;
+            }
+            return acc;
+          }, {});
+          setBoardColumnNames(mapped);
+        }
         applyPreparedRecipe(data.preparedRecipe);
         setWriteBoardName(data.board?.boardName ?? resolvedName);
       } catch (error) {
@@ -884,6 +1023,7 @@ export default function BoardViewClient() {
           boardName: string;
           workspaceName?: string | null;
           kind?: string | null;
+          columns?: Array<{ id: string; title: string }>;
         };
         preparedRecipe: RecipeDefinition;
       };
@@ -902,7 +1042,8 @@ export default function BoardViewClient() {
       });
       await handleWriteBoardSelect(result.board.boardId, {
         prepared: result.preparedRecipe,
-        boardName: result.board.boardName
+        boardName: result.board.boardName,
+        boardColumns: result.board.columns ?? []
       });
       setNewBoardName("");
       const seedResult = await seedBoardWithPreview(
@@ -995,6 +1136,7 @@ export default function BoardViewClient() {
     if (dataSource !== "board" || !mondayClient) {
       return;
     }
+    setFileColumns([]);
     let cancelled = false;
     (async () => {
       try {
@@ -1031,8 +1173,10 @@ export default function BoardViewClient() {
     setNewBoardName("");
     if (dataSource === "file") {
       setSelectedBoardId("");
+      setBoardColumnNames({});
     } else {
       setUploadedFile(null);
+      setFileColumns([]);
     }
   }, [applyPreparedRecipe, dataSource]);
 
@@ -1052,8 +1196,9 @@ export default function BoardViewClient() {
       setSourceBoard(null);
       setWriteBoardId("");
       setWriteBoardName("");
+      setBoardColumnNames({});
     }
-  }, [applyPreparedRecipe, selectedBoardId, dataSource]);
+  }, [applyPreparedRecipe, dataSource, selectedBoardId]);
 
   useEffect(() => {
     if (!writeBoardId) {
@@ -1109,88 +1254,7 @@ export default function BoardViewClient() {
       <section className="grid gap-4 md:grid-cols-[2fr,3fr]">
         <Card>
           <CardHeader>
-            <CardTitle>1. Choose a template (optional)</CardTitle>
-            <CardDescription>
-              Templates are starting points. Leave the default selection to build your own recipe later in the dashboard.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <Label htmlFor="template">Template</Label>
-            <Select
-              id="template"
-              value={selectedTemplateId}
-              onChange={(event) => setSelectedTemplateId(event.target.value)}
-            >
-              {templates.map((template) => (
-                <option key={template.id} value={template.id}>
-                  {template.name}
-                  {template.premium ? " (Premium)" : ""}
-                </option>
-              ))}
-            </Select>
-            <p className="text-xs text-muted-foreground">{selectedTemplate?.description}</p>
-            {needsPremium && (
-              <p className="text-xs text-destructive">
-                {selectedTemplate?.name} requires an upgraded plan with fuzzy deduplication. Choose another template or
-                upgrade to unlock it.
-              </p>
-            )}
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>2. Configure standardization</CardTitle>
-            <CardDescription>
-              Choose how each mapped field should be cleaned before previewing or writing back.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {availableFields.length === 0 ? (
-              <p className="text-sm text-muted-foreground">
-                No target fields detected yet. Select a template or map columns to enable standardization options.
-              </p>
-            ) : (
-              <div className="space-y-4">
-                {availableFields.map((field) => {
-                  const selections = standardizationSelections[field] ?? [];
-                  return (
-                    <div key={field} className="space-y-2">
-                      <div className="flex items-center gap-2">
-                        <p className="text-sm font-medium">{formatFieldLabel(field)}</p>
-                        {selections.length > 0 && (
-                          <span className="rounded bg-muted px-2 py-0.5 text-xs text-muted-foreground">
-                            {selections.length} selected
-                          </span>
-                        )}
-                      </div>
-                      <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                        {STANDARDIZATION_RULES.map((rule) => (
-                          <label key={rule.id} className="flex items-start gap-2 text-xs leading-tight">
-                            <input
-                              type="checkbox"
-                              className="mt-0.5 h-3.5 w-3.5"
-                              checked={selections.includes(rule.id)}
-                              onChange={() => toggleStandardization(field, rule.id)}
-                            />
-                            <span>
-                              <span className="font-medium">{rule.label}</span>
-                              <span className="block text-muted-foreground">{rule.description}</span>
-                            </span>
-                          </label>
-                        ))}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>3. Select data source</CardTitle>
+            <CardTitle>1. Select data source</CardTitle>
             <CardDescription>Preview via upload or directly from a monday board.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -1217,7 +1281,12 @@ export default function BoardViewClient() {
                     setSourceBoard(null);
                     setWriteBoardId("");
                     setWriteBoardName("");
-                    
+                    setPreparingWriteBoard(false);
+                    setBoardColumnNames({});
+                    setFileColumns([]);
+                    void extractColumnsFromFile(file).then((columns) => {
+                      setFileColumns(columns ?? []);
+                    });
                     setToast({ message: `Loaded ${file.name}`, variant: "success" });
                   }}
                 />
@@ -1233,20 +1302,26 @@ export default function BoardViewClient() {
                     <Select
                       id="board-select"
                       value={selectedBoardId}
-                      onChange={(event) => setSelectedBoardId(event.target.value)}
+                      onChange={(event) => {
+                        const value = event.target.value;
+                        setSelectedBoardId(value);
+                        void handleWriteBoardSelect(value);
+                      }}
                       className="sm:flex-1"
+                      disabled={isPreparingWriteBoard}
                     >
                       <option value="">Select a board</option>
                       {boards.map((board) => (
                         <option key={board.id} value={board.id}>
                           {board.name}
-                          {board.workspaceName ? ` — ${board.workspaceName}` : ""}
+                          {board.workspaceName ? ` - ${board.workspaceName}` : ""}
                         </option>
                       ))}
                     </Select>
                     <Button
                       type="button"
                       variant="outline"
+                      size="sm"
                       onClick={() => {
                         if (!mondayClient) {
                           setBoardsError("Missing monday context. Open this app inside monday.");
@@ -1260,7 +1335,7 @@ export default function BoardViewClient() {
                     </Button>
                   </div>
                   {isLoadingBoards && (
-                    <p className="text-xs text-muted-foreground">Loading boards…</p>
+                    <p className="text-xs text-muted-foreground">Loading boards...</p>
                   )}
                   {boardsError && <p className="text-xs text-destructive">{boardsError}</p>}
                   {sourceBoard && (
@@ -1300,6 +1375,16 @@ export default function BoardViewClient() {
                         throw new Error(await response.text());
                       }
                       const result = (await response.json()) as PreviewResponse;
+                      const previewBoardColumns = (result.columns ?? []).filter(
+                        (column): column is { id: string; title: string } => Boolean(column.id)
+                      );
+                      if (previewBoardColumns.length > 0) {
+                        const mapped = previewBoardColumns.reduce<Record<string, string>>((acc, column) => {
+                          acc[column.id] = column.title ?? column.id;
+                          return acc;
+                        }, {});
+                        setBoardColumnNames(mapped);
+                      }
                       setPreview(result);
                       setSourceBoard(result.sourceBoard ?? null);
                       const prepared =
@@ -1308,7 +1393,8 @@ export default function BoardViewClient() {
                       if (result.sourceBoard) {
                         await handleWriteBoardSelect(result.sourceBoard.boardId, {
                           prepared,
-                          boardName: result.sourceBoard.boardName
+                          boardName: result.sourceBoard.boardName,
+                          boardColumns: previewBoardColumns
                         });
                       } else {
                         applyPreparedRecipe(prepared ?? null);
@@ -1316,7 +1402,9 @@ export default function BoardViewClient() {
                         setWriteBoardName("");
                       }
                       setToast({
-                        message: `Preview ready${result.sourceBoard ? ` for ${result.sourceBoard.boardName}` : ""}`,
+                        message: `Preview ready${
+                          result.sourceBoard ? ` for ${result.sourceBoard.boardName}` : ""
+                        }`,
                         variant: "success"
                       });
                     } catch (error) {
@@ -1358,19 +1446,117 @@ export default function BoardViewClient() {
                       result.preparedRecipe ?? buildRecipeWithStandardization(selectedRecipe)
                     );
                     setSourceBoard(null);
+                    if (result.columns && result.columns.length > 0) {
+                      const columns = result.columns
+                        .map((column) => column.title)
+                        .filter((title): title is string => Boolean(title));
+                      if (columns.length > 0) {
+                        setFileColumns(Array.from(new Set(columns)));
+                      }
+                    } else if (result.rows.length > 0) {
+                      const rowColumns = Object.keys(result.rows[0]).filter(Boolean);
+                      if (rowColumns.length > 0) {
+                        setFileColumns(Array.from(new Set(rowColumns)));
+                      }
+                    }
+                    setBoardColumnNames({});
                     setToast({ message: "Preview ready", variant: "success" });
-              } catch (error) {
-                setToast({ message: (error as Error).message, variant: "error" });
-              }
-            });
+                  } catch (error) {
+                    setToast({ message: (error as Error).message, variant: "error" });
+                  }
+                });
               }}
             >
-              {isPreviewing ? "Processing..." : "Preview recipe"}
+              {isPreviewing ? "Processing..." : "Preview data"}
             </Button>
           </CardContent>
         </Card>
-      </section>
 
+        <Card>
+          <CardHeader>
+            <CardTitle>2. Choose a template (optional)</CardTitle>
+            <CardDescription>
+              Templates are starting points. Leave the default selection to build your own recipe later in the dashboard.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <Label htmlFor="template">Template</Label>
+            <Select
+              id="template"
+              value={selectedTemplateId}
+              onChange={(event) => setSelectedTemplateId(event.target.value)}
+            >
+              {templates.map((template) => (
+                <option key={template.id} value={template.id}>
+                  {template.name}
+                  {template.premium ? " (Premium)" : ""}
+                </option>
+              ))}
+            </Select>
+            <p className="text-xs text-muted-foreground">{selectedTemplate?.description}</p>
+            {needsPremium && (
+              <p className="text-xs text-destructive">
+                {selectedTemplate?.name} requires an upgraded plan with fuzzy deduplication. Choose another template or
+                upgrade to unlock it.
+              </p>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>3. Configure standardization</CardTitle>
+            <CardDescription>
+              Choose how each column should be cleaned before previewing or writing back.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {standardizationTargets.length === 0 ? (
+              <p className="text-sm text-muted-foreground">
+                Load a data source or template mapping to enable standardization options.
+              </p>
+            ) : (
+              <div className="space-y-4">
+                {standardizationTargets.map((target) => {
+                  const selections = standardizationSelections[target.field] ?? [];
+                  return (
+                    <div key={target.field} className="space-y-2">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className="text-sm font-medium">{target.label}</p>
+                        <span className="text-xs text-muted-foreground">{target.field}</span>
+                        {selections.length > 0 && (
+                          <span className="rounded bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+                            {selections.length} selected
+                          </span>
+                        )}
+                      </div>
+                      <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                        {STANDARDIZATION_RULES.map((rule) => (
+                          <label
+                            key={`${target.field}-${rule.id}`}
+                            className="flex items-start gap-2 text-xs leading-tight"
+                          >
+                            <input
+                              type="checkbox"
+                              className="mt-0.5 h-3.5 w-3.5"
+                              checked={selections.includes(rule.id)}
+                              onChange={() => toggleStandardization(target.field, rule.id)}
+                            />
+                            <span>
+                              <span className="font-medium">{rule.label}</span>
+                              <span className="block text-muted-foreground">{rule.description}</span>
+                            </span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </section>
       <PlanGate
         allowed={!needsPremium}
         plan={context?.plan ?? "free"}
@@ -1411,7 +1597,7 @@ export default function BoardViewClient() {
                     {boards.map((board) => (
                       <option key={board.id} value={board.id}>
                         {board.name}
-                        {board.workspaceName ? ` — ${board.workspaceName}` : ""}
+                        {board.workspaceName ? ` - ${board.workspaceName}` : ""}
                       </option>
                     ))}
                   </Select>
