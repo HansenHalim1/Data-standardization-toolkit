@@ -1,7 +1,7 @@
 'use client';
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import mondaySdk from "monday-sdk-js";
 import type {
   FormatStep,
@@ -403,8 +403,8 @@ export default function BoardViewClient() {
   const [toast, setToast] = useState<{ message: string; variant?: "default" | "success" | "error" } | null>(
     null
   );
-  const [isPreviewing, startPreview] = useTransition();
-  const [isExecuting, startExecute] = useTransition();
+  const [isPreviewing, setIsPreviewing] = useState(false);
+  const [isExecuting, setIsExecuting] = useState(false);
   const [dataSource, setDataSource] = useState<DataSource>("file");
   const [boards, setBoards] = useState<MondayBoardOption[]>([]);
   const [isLoadingBoards, setLoadingBoards] = useState(false);
@@ -1148,13 +1148,16 @@ export default function BoardViewClient() {
             <Button
               disabled={!canPreview}
               onClick={() => {
-                if (!context) return;
+                if (!context || isPreviewing) {
+                  return;
+                }
                 if (dataSource === "board") {
                   if (!selectedBoardId) {
                     setToast({ message: "Select a board to preview.", variant: "error" });
                     return;
                   }
-                  startPreview(async () => {
+                  void (async () => {
+                    setIsPreviewing(true);
                     try {
                       const sessionToken = await getSessionToken();
                       const response = await fetch("/api/recipes/run/preview", {
@@ -1207,8 +1210,10 @@ export default function BoardViewClient() {
                       });
                     } catch (error) {
                       setToast({ message: (error as Error).message, variant: "error" });
+                    } finally {
+                      setIsPreviewing(false);
                     }
-                  });
+                  })();
                   return;
                 }
 
@@ -1217,7 +1222,8 @@ export default function BoardViewClient() {
                   return;
                 }
 
-                startPreview(async () => {
+                void (async () => {
+                  setIsPreviewing(true);
                   try {
                     const sessionToken = await getSessionToken();
                     const formData = new FormData();
@@ -1261,8 +1267,10 @@ export default function BoardViewClient() {
                     setToast({ message: "Preview ready", variant: "success" });
                   } catch (error) {
                     setToast({ message: (error as Error).message, variant: "error" });
+                  } finally {
+                    setIsPreviewing(false);
                   }
-                });
+                })();
               }}
             >
               {isPreviewing ? "Processing..." : "Preview data"}
@@ -1422,12 +1430,13 @@ export default function BoardViewClient() {
                 variant="secondary"
                 disabled={!preview || !context || isExecuting || !writeBoardId || isPreparingWriteBoard}
                 onClick={() => {
-                  if (!preview || !context) return;
+                  if (!preview || !context || isExecuting) return;
                   if (!writeBoardId) {
                     setToast({ message: "Select a board to write to before running.", variant: "error" });
                     return;
                   }
-                  startExecute(async () => {
+                  void (async () => {
+                    setIsExecuting(true);
                     try {
                       const sessionToken = await getSessionToken();
                       const baseRecipe = preparedRecipe ?? BLANK_RECIPE;
@@ -1466,8 +1475,10 @@ export default function BoardViewClient() {
                       });
                     } catch (error) {
                       setToast({ message: (error as Error).message, variant: "error" });
+                    } finally {
+                      setIsExecuting(false);
                     }
-                  });
+                  })();
                 }}
               >
                 {isExecuting ? "Running..." : "Run write-back"}
