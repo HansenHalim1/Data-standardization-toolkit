@@ -1734,6 +1734,10 @@ useEffect(() => {
                   ? Object.keys(boardColumnNames)
                   : fileColumns;
 
+              // Normalize a string for comparison
+              const normalize = (s: string) =>
+                s.toLowerCase().replace(/[^a-z0-9]/g, "");
+
               return (
                 <div className="space-y-3">
                   <Label>Column Mapping</Label>
@@ -1747,17 +1751,59 @@ useEffect(() => {
                         const writeStep = preparedRecipe?.steps.find(
                           (s): s is WriteBackStep => s.type === "write_back"
                         );
-                        const selected = writeStep?.config?.columnMapping?.[sourceField] ?? "";
+
+                        // try to get the currently selected mapping
+                        let selected = writeStep?.config?.columnMapping?.[sourceField] ?? "";
+
+                        // auto-map by comparing normalized names
+                        if (!selected && Object.keys(boardColumnNames).length > 0) {
+                          const normalizedSource = normalize(sourceField);
+                          const autoMatch = Object.entries(boardColumnNames).find(
+                            ([, name]) => normalize(name) === normalizedSource
+                          );
+                          if (autoMatch) {
+                            const [autoId] = autoMatch;
+                            selected = autoId;
+                            // update preparedRecipe automatically
+                            setPreparedRecipe((prev) => {
+                              if (!prev) return prev;
+                              const clone = structuredClone(prev);
+                              const write = clone.steps.find(
+                                (s): s is WriteBackStep => s.type === "write_back"
+                              );
+                              if (!write) return clone;
+                              write.config.columnMapping = {
+                                ...(write.config.columnMapping ?? {}),
+                                [sourceField]: autoId,
+                              };
+                              return clone;
+                            });
+                          }
+                        }
+
+                        const friendlyName =
+                          selected && boardColumnNames[selected]
+                            ? boardColumnNames[selected]
+                            : "";
 
                         return (
                           <div
                             key={sourceField}
                             className="flex items-center justify-between gap-2 border rounded-md px-2 py-1"
                           >
-                            <span className="text-sm">{sourceField}</span>
+                            <span className="text-sm">
+                              {sourceField}
+                              {friendlyName && (
+                                <span className="ml-2 text-xs text-muted-foreground">
+                                  → {friendlyName}
+                                </span>
+                              )}
+                            </span>
                             <Select
                               value={selected}
                               onChange={(e) => {
+                                const newId = e.target.value;
+                                const newName = boardColumnNames[newId] ?? newId;
                                 setPreparedRecipe((prev) => {
                                   if (!prev) return prev;
                                   const clone = structuredClone(prev);
@@ -1767,7 +1813,7 @@ useEffect(() => {
                                   if (!write) return clone;
                                   write.config.columnMapping = {
                                     ...(write.config.columnMapping ?? {}),
-                                    [sourceField]: e.target.value,
+                                    [sourceField]: newId,
                                   };
                                   return clone;
                                 });
@@ -1789,6 +1835,7 @@ useEffect(() => {
               );
             })()}
             {/* === Mapping UI end === */}
+
 
 
               {/* Diff viewer */}
