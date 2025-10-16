@@ -31,11 +31,40 @@ type Template = {
   id: string;
   name: string;
   description: string;
-  recipe: RecipeDefinition;
+  recipe: RecipeDefinition | null;
   premium?: boolean;
 };
 
+const CUSTOM_TEMPLATE_ID = "custom";
+
+const BLANK_RECIPE: RecipeDefinition = {
+  id: "custom",
+  name: "Custom Recipe",
+  version: 1,
+  steps: [
+    {
+      type: "map_columns",
+      config: {
+        mapping: {},
+        dropUnknown: false
+      }
+    },
+    {
+      type: "write_back",
+      config: {
+        strategy: "monday_upsert"
+      }
+    }
+  ]
+};
+
 const templates: Template[] = [
+  {
+    id: CUSTOM_TEMPLATE_ID,
+    name: "Start from scratch",
+    description: "Begin with an empty recipe and configure your own workflow later.",
+    recipe: null
+  },
   {
     id: "crm",
     name: "CRM Contacts",
@@ -220,8 +249,7 @@ const templates: Template[] = [
   }
 ];
 
-const DEFAULT_TEMPLATE_ID =
-  templates.find((template) => !template.premium)?.id ?? templates[0]?.id ?? "";
+const DEFAULT_TEMPLATE_ID = CUSTOM_TEMPLATE_ID;
 
 type DataSource = "file" | "board";
 
@@ -266,22 +294,6 @@ export default function BoardViewClient() {
   const [newBoardName, setNewBoardName] = useState<string>("");
   const [isCreatingBoard, setIsCreatingBoard] = useState(false);
 
-  const applyPreparedRecipe = useCallback((recipe: RecipeDefinition | null) => {
-    setPreparedRecipe(recipe);
-    if (!recipe) {
-      setWriteBoardError(null);
-      return;
-    }
-    const writeStep = recipe.steps.find((step): step is WriteBackStep => step.type === "write_back");
-    const mapping = writeStep?.config?.columnMapping;
-    if (!mapping || Object.keys(mapping).length === 0) {
-      setWriteBoardError(
-        "No matching columns found between the template and the selected board. Rename the board columns or adjust the template mapping."
-      );
-    } else {
-      setWriteBoardError(null);
-    }
-  }, []);
   const mondayClient = useMemo(() => {
     if (typeof window === "undefined") {
       return null;
@@ -292,6 +304,37 @@ export default function BoardViewClient() {
   const selectedTemplate = useMemo(
     () => templates.find((template) => template.id === selectedTemplateId) ?? templates[0],
     [selectedTemplateId]
+  );
+
+  const isBlankSelection = selectedTemplate?.recipe == null;
+
+  const selectedRecipe = useMemo(
+    () => selectedTemplate?.recipe ?? BLANK_RECIPE,
+    [selectedTemplate]
+  );
+
+  const applyPreparedRecipe = useCallback(
+    (recipe: RecipeDefinition | null) => {
+      setPreparedRecipe(recipe);
+      if (!recipe) {
+        setWriteBoardError(null);
+        return;
+      }
+      const writeStep = recipe.steps.find((step): step is WriteBackStep => step.type === "write_back");
+      const mapping = writeStep?.config?.columnMapping;
+      if (!mapping || Object.keys(mapping).length === 0) {
+        if (isBlankSelection) {
+          setWriteBoardError(null);
+        } else {
+          setWriteBoardError(
+            "No matching columns found between the template and the selected board. Rename the board columns or adjust the template mapping."
+          );
+        }
+      } else {
+        setWriteBoardError(null);
+      }
+    },
+    [isBlankSelection]
   );
 
   const getSessionToken = useCallback(async () => {
@@ -375,7 +418,7 @@ export default function BoardViewClient() {
             Authorization: `Bearer ${sessionToken}`
           },
           body: JSON.stringify({
-            recipe: selectedTemplate.recipe
+            recipe: selectedRecipe
           })
         });
         if (!response.ok) {
@@ -393,7 +436,7 @@ export default function BoardViewClient() {
         setPreparingWriteBoard(false);
       }
     },
-    [applyPreparedRecipe, boards, getSessionToken, preparedRecipe, selectedTemplate.recipe, sourceBoard?.boardId]
+    [applyPreparedRecipe, boards, getSessionToken, preparedRecipe, selectedRecipe, sourceBoard?.boardId]
   );
 
   const handleCreateBoard = useCallback(async () => {
@@ -412,7 +455,7 @@ export default function BoardViewClient() {
       setBoardsError(null);
       setWriteBoardError(null);
       const sessionToken = await getSessionToken();
-      const recipeForBoard = preparedRecipe ?? selectedTemplate.recipe;
+      const recipeForBoard = preparedRecipe ?? selectedRecipe;
       const response = await fetch("/api/monday/boards", {
         method: "POST",
         headers: {
@@ -468,6 +511,7 @@ export default function BoardViewClient() {
     handleWriteBoardSelect,
     newBoardName,
     preparedRecipe,
+    selectedRecipe,
     selectedTemplate
   ]);
 
@@ -648,9 +692,9 @@ export default function BoardViewClient() {
       <section className="grid gap-4 md:grid-cols-[2fr,3fr]">
         <Card>
           <CardHeader>
-            <CardTitle>1. Choose a template</CardTitle>
+            <CardTitle>1. Choose a template (optional)</CardTitle>
             <CardDescription>
-              Templates are starting points. Customize recipes in the dashboard after saving.
+              Templates are starting points. Leave the default selection to build your own recipe later in the dashboard.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -781,7 +825,7 @@ export default function BoardViewClient() {
                         },
                         body: JSON.stringify({
                           source: { type: "board", boardId: selectedBoardId },
-                          recipe: selectedTemplate.recipe,
+                          recipe: selectedRecipe,
                           plan: context.plan
                         })
                       });
@@ -791,7 +835,7 @@ export default function BoardViewClient() {
                       const result = (await response.json()) as PreviewResponse;
                       setPreview(result);
                       setSourceBoard(result.sourceBoard ?? null);
-                      const prepared = result.preparedRecipe ?? (result.sourceBoard ? null : selectedTemplate.recipe);
+                      const prepared = result.preparedRecipe ?? (result.sourceBoard ? null : selectedRecipe);
                       if (result.sourceBoard) {
                         await handleWriteBoardSelect(result.sourceBoard.boardId, {
                           prepared,
@@ -824,7 +868,7 @@ export default function BoardViewClient() {
                     const formData = new FormData();
                     formData.set("file", uploadedFile);
                     formData.set("tenantId", context.tenantId);
-                    formData.set("recipe", JSON.stringify(selectedTemplate.recipe));
+                    formData.set("recipe", JSON.stringify(selectedRecipe));
                     formData.set("plan", context.plan);
                     const response = await fetch("/api/recipes/run/preview", {
                       method: "POST",
@@ -838,10 +882,9 @@ export default function BoardViewClient() {
                     }
                     const result = (await response.json()) as PreviewResponse;
                     setPreview(result);
-                    applyPreparedRecipe(selectedTemplate.recipe);
+                    applyPreparedRecipe(selectedRecipe);
                     setSourceBoard(null);
-                    
-                setToast({ message: "Preview ready", variant: "success" });
+                    setToast({ message: "Preview ready", variant: "success" });
               } catch (error) {
                 setToast({ message: (error as Error).message, variant: "error" });
               }
@@ -959,7 +1002,7 @@ export default function BoardViewClient() {
                   startExecute(async () => {
                     try {
                       const sessionToken = await getSessionToken();
-                      const baseRecipe = preparedRecipe ?? selectedTemplate.recipe;
+                      const baseRecipe = preparedRecipe ?? selectedRecipe;
                       const recipeForExecution = JSON.parse(JSON.stringify(baseRecipe)) as RecipeDefinition;
                       const writeStep = recipeForExecution.steps.find(
                         (step): step is WriteBackStep => step.type === "write_back"
