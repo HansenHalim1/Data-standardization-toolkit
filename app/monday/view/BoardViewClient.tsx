@@ -1313,6 +1313,44 @@ useEffect(() => {
     }
   }, [boards, writeBoardId, writeBoardName]);
 
+  // === Auto-map columns when board or file columns change ===
+  useEffect(() => {
+    if (!preparedRecipe) return;
+    if (Object.keys(boardColumnNames).length === 0 && fileColumns.length === 0) return;
+
+    setPreparedRecipe((prev) => {
+      if (!prev) return prev;
+      const clone = structuredClone(prev);
+      const write = clone.steps.find(
+        (s): s is WriteBackStep => s.type === "write_back"
+      );
+      if (!write) return clone;
+
+      const normalize = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+      const allTargets =
+        fileColumns.length > 0 ? fileColumns : Object.keys(boardColumnNames);
+
+      // Go through all unmapped fields
+      for (const sourceField of allTargets) {
+        const alreadyMapped = write.config.columnMapping?.[sourceField];
+        if (alreadyMapped) continue;
+
+        const normalizedSource = normalize(sourceField);
+        const autoMatch = Object.entries(boardColumnNames).find(
+          ([, name]) => normalize(name) === normalizedSource
+        );
+        if (autoMatch) {
+          const [autoId] = autoMatch;
+          write.config.columnMapping = {
+            ...(write.config.columnMapping ?? {}),
+            [sourceField]: autoId,
+          };
+        }
+      }
+      return clone;
+    });
+  }, [preparedRecipe, boardColumnNames, fileColumns]);
+
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-8 px-4 py-10">
       <header className="flex flex-col gap-2">
@@ -1728,15 +1766,10 @@ useEffect(() => {
 
               {/* === Mapping UI start === */}
 {(() => {
-  // Choose correct source: file or board
   const sourceFields =
     dataSource === "board" && Object.keys(boardColumnNames).length > 0
       ? Object.keys(boardColumnNames)
       : fileColumns;
-
-  // Helper: normalize text for loose matching
-  const normalize = (s: string) =>
-    s.toLowerCase().replace(/[^a-z0-9]/g, "");
 
   return (
     <div className="space-y-3">
@@ -1751,41 +1784,11 @@ useEffect(() => {
             const writeStep = preparedRecipe?.steps.find(
               (s): s is WriteBackStep => s.type === "write_back"
             );
-
-            // Current selection (if any)
-            let selected = writeStep?.config?.columnMapping?.[sourceField] ?? "";
-
-            // === Auto-map by matching normalized names ===
-            if (!selected && Object.keys(boardColumnNames).length > 0) {
-              const normalizedSource = normalize(sourceField);
-              const autoMatch = Object.entries(boardColumnNames).find(
-                ([, name]) => normalize(name) === normalizedSource
-              );
-              if (autoMatch) {
-                const [autoId] = autoMatch;
-                selected = autoId;
-                setPreparedRecipe((prev) => {
-                  if (!prev) return prev;
-                  const clone = structuredClone(prev);
-                  const write = clone.steps.find(
-                    (s): s is WriteBackStep => s.type === "write_back"
-                  );
-                  if (!write) return clone;
-                  write.config.columnMapping = {
-                    ...(write.config.columnMapping ?? {}),
-                    [sourceField]: autoId,
-                  };
-                  return clone;
-                });
-              }
-            }
-
+            const selected = writeStep?.config?.columnMapping?.[sourceField] ?? "";
             const friendlyName =
               selected && boardColumnNames[selected]
                 ? boardColumnNames[selected]
                 : "";
-
-            // Friendly label for left side (hide raw ids)
             const leftLabel = boardColumnNames[sourceField] ?? sourceField;
 
             return (
@@ -1836,6 +1839,7 @@ useEffect(() => {
   );
 })()}
 {/* === Mapping UI end === */}
+
 
 
 
