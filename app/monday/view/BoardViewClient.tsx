@@ -36,6 +36,7 @@ type Template = {
 };
 
 const CUSTOM_TEMPLATE_ID = "custom";
+const DEFAULT_BOARD_KIND = "share";
 
 const BLANK_RECIPE: RecipeDefinition = {
   id: "custom",
@@ -293,6 +294,7 @@ export default function BoardViewClient() {
   const [isPreparingWriteBoard, setPreparingWriteBoard] = useState(false);
   const [newBoardName, setNewBoardName] = useState<string>("");
   const [isCreatingBoard, setIsCreatingBoard] = useState(false);
+  const [isSeedingBoard, setIsSeedingBoard] = useState(false);
 
   const mondayClient = useMemo(() => {
     if (typeof window === "undefined") {
@@ -348,6 +350,73 @@ export default function BoardViewClient() {
     }
     return token;
   }, [mondayClient]);
+
+  const seedBoardWithPreview = useCallback(
+    async (boardId: string, boardName: string, prepared: RecipeDefinition | null) => {
+      if (!preview || preview.rows.length === 0 || !context) {
+        return "skipped" as const;
+      }
+
+      const baseRecipe = prepared ?? preparedRecipe ?? selectedRecipe;
+      if (!baseRecipe) {
+        return "skipped" as const;
+      }
+
+      const recipeForExecution = JSON.parse(JSON.stringify(baseRecipe)) as RecipeDefinition;
+      const writeStep = recipeForExecution.steps.find(
+        (step): step is WriteBackStep => step.type === "write_back"
+      );
+      if (!writeStep) {
+        return "skipped" as const;
+      }
+
+      writeStep.config.boardId = boardId;
+      if (!writeStep.config.columnMapping || Object.keys(writeStep.config.columnMapping).length === 0) {
+        return "skipped" as const;
+      }
+
+      try {
+        setIsSeedingBoard(true);
+        setToast({
+          message: `Seeding ${preview.rows.length} rows into "${boardName}"...`,
+          variant: "default"
+        });
+        const sessionToken = await getSessionToken();
+        const response = await fetch("/api/recipes/run/execute", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${sessionToken}`
+          },
+          body: JSON.stringify({
+            tenantId: context.tenantId,
+            recipe: recipeForExecution,
+            runId: preview.runId,
+            previewRows: preview.rows,
+            plan: context.plan
+          })
+        });
+        if (!response.ok) {
+          throw new Error(await response.text());
+        }
+        const result = (await response.json()) as { rowsWritten: number };
+        setToast({
+          message: `Board "${boardName}" seeded with ${result.rowsWritten} rows.`,
+          variant: "success"
+        });
+        return "seeded" as const;
+      } catch (error) {
+        setToast({
+          message: `Board created but seeding failed: ${(error as Error).message}`,
+          variant: "error"
+        });
+        return "failed" as const;
+      } finally {
+        setIsSeedingBoard(false);
+      }
+    },
+    [context, getSessionToken, preparedRecipe, preview, selectedRecipe]
+  );
 
   const loadBoards = useCallback(async () => {
     const sessionToken = await getSessionToken();
@@ -464,6 +533,7 @@ export default function BoardViewClient() {
         },
         body: JSON.stringify({
           name: trimmedName,
+          boardKind: DEFAULT_BOARD_KIND,
           recipe: recipeForBoard
         })
       });
@@ -497,10 +567,17 @@ export default function BoardViewClient() {
         boardName: result.board.boardName
       });
       setNewBoardName("");
-      setToast({
-        message: `Created board "${result.board.boardName}".`,
-        variant: "success"
-      });
+      const seedResult = await seedBoardWithPreview(
+        result.board.boardId,
+        result.board.boardName,
+        result.preparedRecipe
+      );
+      if (seedResult === "skipped") {
+        setToast({
+          message: `Created board "${result.board.boardName}".`,
+          variant: "success"
+        });
+      }
     } catch (error) {
       setWriteBoardError((error as Error).message ?? "Failed to create board.");
     } finally {
@@ -511,6 +588,7 @@ export default function BoardViewClient() {
     handleWriteBoardSelect,
     newBoardName,
     preparedRecipe,
+    seedBoardWithPreview,
     selectedRecipe,
     selectedTemplate
   ]);
@@ -963,7 +1041,7 @@ export default function BoardViewClient() {
                     onChange={(event) => setNewBoardName(event.target.value)}
                     placeholder="New board name"
                     className="sm:flex-1"
-                    disabled={isCreatingBoard || isPreparingWriteBoard}
+                    disabled={isCreatingBoard || isPreparingWriteBoard || isSeedingBoard}
                   />
                   <Button
                     type="button"
@@ -972,10 +1050,11 @@ export default function BoardViewClient() {
                     disabled={
                       isCreatingBoard ||
                       isPreparingWriteBoard ||
+                      isSeedingBoard ||
                       !newBoardName.trim()
                     }
                   >
-                    {isCreatingBoard ? "Creating..." : "Create board"}
+                    {isCreatingBoard ? "Creating..." : isSeedingBoard ? "Seeding..." : "Create board"}
                   </Button>
                 </div>
                 {isPreparingWriteBoard && (

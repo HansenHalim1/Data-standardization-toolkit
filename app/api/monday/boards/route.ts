@@ -73,6 +73,7 @@ export async function POST(request: Request) {
 
     const { name, boardKind, workspaceId, recipe } = parsed.data;
     const recipeDefinition = recipe as RecipeDefinition;
+    const resolvedBoardKind = boardKind ?? "share";
 
     const workspaceIdNumber =
       workspaceId === undefined
@@ -90,7 +91,7 @@ export async function POST(request: Request) {
       accessToken,
       recipe: recipeDefinition,
       boardName: name,
-      boardKind,
+      boardKind: resolvedBoardKind,
       workspaceId: workspaceIdNumber
     });
 

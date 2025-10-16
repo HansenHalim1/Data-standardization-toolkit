@@ -585,7 +585,7 @@ export async function createBoardForRecipe({
   accessToken,
   recipe,
   boardName,
-  boardKind = "private",
+  boardKind = "share",
   workspaceId
 }: {
   accessToken: string;
