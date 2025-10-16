@@ -3,7 +3,13 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
 import mondaySdk from "monday-sdk-js";
-import type { RecipeDefinition, RecipePreviewResult, WriteBackStep } from "@/lib/recipe-engine";
+import type {
+  FormatStep,
+  MapColumnsStep,
+  RecipeDefinition,
+  RecipePreviewResult,
+  WriteBackStep
+} from "@/lib/recipe-engine";
 import type { PlanFlags } from "@/lib/entitlements";
 import { UploadDropzone } from "@/components/UploadDropzone";
 import { DataGridPreview } from "@/components/DataGridPreview";
@@ -250,6 +256,212 @@ const templates: Template[] = [
   }
 ];
 
+type FormatOperation = FormatStep["config"]["operations"][number];
+type OperationConfig = FormatOperation["op"];
+
+type StandardizationRule = {
+  id: string;
+  label: string;
+  description: string;
+  build: (field: string) => FormatOperation;
+  matches: (field: string, op: OperationConfig) => boolean;
+};
+
+const STANDARDIZATION_RULES: StandardizationRule[] = [
+  {
+    id: "title_case",
+    label: "Title case",
+    description: "Capitalize names (e.g., \"john\" -> \"John\").",
+    build: (field) => ({
+      field,
+      op: { kind: "title_case" }
+    }),
+    matches: (_field, op) => op.kind === "title_case"
+  },
+  {
+    id: "email_normalize",
+    label: "Normalize email",
+    description: "Lowercase and trim email addresses.",
+    build: (field) => ({
+      field,
+      op: { kind: "email_normalize" }
+    }),
+    matches: (_field, op) => op.kind === "email_normalize"
+  },
+  {
+    id: "phone_e164",
+    label: "Format phone",
+    description: "Convert phone numbers to E.164 (US default).",
+    build: (field) => ({
+      field,
+      op: { kind: "phone_e164", defaultCountry: "US" }
+    }),
+    matches: (_field, op) => op.kind === "phone_e164"
+  },
+  {
+    id: "date_parse",
+    label: "Date to ISO",
+    description: "Normalize dates to YYYY-MM-DD.",
+    build: (field) => ({
+      field,
+      op: { kind: "date_parse", outputFormat: "yyyy-MM-dd" }
+    }),
+    matches: (_field, op) => op.kind === "date_parse"
+  },
+  {
+    id: "iso_country",
+    label: "Country to ISO",
+    description: "Map country names to ISO codes.",
+    build: (field) => ({
+      field,
+      op: { kind: "iso_country" }
+    }),
+    matches: (_field, op) => op.kind === "iso_country"
+  },
+  {
+    id: "currency_code",
+    label: "Currency code",
+    description: "Standardize currency strings (e.g., usd -> USD).",
+    build: (field) => ({
+      field,
+      op: { kind: "currency_code" }
+    }),
+    matches: (_field, op) => op.kind === "currency_code"
+  },
+  {
+    id: "number_parse",
+    label: "Parse number",
+    description: "Parse numbers using the en-US locale.",
+    build: (field) => ({
+      field,
+      op: { kind: "number_parse", locale: "en-US" }
+    }),
+    matches: (_field, op) => op.kind === "number_parse"
+  }
+];
+
+const STANDARDIZATION_RULES_MAP = new Map(STANDARDIZATION_RULES.map((rule) => [rule.id, rule]));
+const STANDARDIZATION_RULE_INDEX = new Map(
+  STANDARDIZATION_RULES.map((rule, index) => [rule.id, index])
+);
+
+function sortRuleIds(ids: Iterable<string>): string[] {
+  const unique = Array.from(new Set(ids));
+  return unique.sort((a, b) => {
+    const indexA = STANDARDIZATION_RULE_INDEX.get(a) ?? Number.MAX_SAFE_INTEGER;
+    const indexB = STANDARDIZATION_RULE_INDEX.get(b) ?? Number.MAX_SAFE_INTEGER;
+    return indexA - indexB;
+  });
+}
+
+function formatFieldLabel(field: string): string {
+  const spaced = field
+    .replace(/[_\-]+/g, " ")
+    .replace(/([a-z\d])([A-Z])/g, "$1 $2")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!spaced) {
+    return "Field";
+  }
+  return spaced
+    .split(" ")
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
+}
+
+function getRecipeTargetFields(recipe: RecipeDefinition | null): string[] {
+  if (!recipe) {
+    return [];
+  }
+  const fields = new Set<string>();
+  const mapStep = recipe.steps.find(
+    (step): step is MapColumnsStep => step.type === "map_columns"
+  );
+  if (mapStep) {
+    const mapping = mapStep.config.mapping ?? {};
+    for (const target of Object.values(mapping)) {
+      if (target) {
+        fields.add(target);
+      }
+    }
+  }
+  const writeStep = recipe.steps.find(
+    (step): step is WriteBackStep => step.type === "write_back"
+  );
+  if (writeStep) {
+    if (writeStep.config.columnMapping) {
+      for (const target of Object.keys(writeStep.config.columnMapping)) {
+        if (target) {
+          fields.add(target);
+        }
+      }
+    }
+    if (writeStep.config.keyColumn) {
+      fields.add(writeStep.config.keyColumn);
+    }
+    if (writeStep.config.itemNameField) {
+      fields.add(writeStep.config.itemNameField);
+    }
+  }
+  return Array.from(fields);
+}
+
+function deriveStandardizationSelectionsFromRecipe(
+  recipe: RecipeDefinition | null
+): Record<string, string[]> {
+  if (!recipe) {
+    return {};
+  }
+  const formatStep = recipe.steps.find(
+    (step): step is FormatStep => step.type === "format"
+  );
+  if (!formatStep) {
+    return {};
+  }
+  const selections: Record<string, string[]> = {};
+  for (const operation of formatStep.config.operations ?? []) {
+    const rule = STANDARDIZATION_RULES.find((candidate) =>
+      candidate.matches(operation.field, operation.op)
+    );
+    if (!rule) {
+      continue;
+    }
+    const existing = selections[operation.field] ?? [];
+    selections[operation.field] = [...existing, rule.id];
+  }
+  for (const field of Object.keys(selections)) {
+    selections[field] = sortRuleIds(selections[field]);
+  }
+  return selections;
+}
+
+function selectionMapsEqual(
+  a: Record<string, string[]>,
+  b: Record<string, string[]>
+): boolean {
+  const keysA = Object.keys(a).sort();
+  const keysB = Object.keys(b).sort();
+  if (keysA.length !== keysB.length) {
+    return false;
+  }
+  for (let i = 0; i < keysA.length; i += 1) {
+    if (keysA[i] !== keysB[i]) {
+      return false;
+    }
+    const arrA = a[keysA[i]];
+    const arrB = b[keysA[i]];
+    if (arrA.length !== arrB.length) {
+      return false;
+    }
+    for (let j = 0; j < arrA.length; j += 1) {
+      if (arrA[j] !== arrB[j]) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
 const DEFAULT_TEMPLATE_ID = CUSTOM_TEMPLATE_ID;
 
 type DataSource = "file" | "board";
@@ -295,6 +507,7 @@ export default function BoardViewClient() {
   const [newBoardName, setNewBoardName] = useState<string>("");
   const [isCreatingBoard, setIsCreatingBoard] = useState(false);
   const [isSeedingBoard, setIsSeedingBoard] = useState(false);
+  const [standardizationSelections, setStandardizationSelections] = useState<Record<string, string[]>>({});
 
   const mondayClient = useMemo(() => {
     if (typeof window === "undefined") {
@@ -315,14 +528,131 @@ export default function BoardViewClient() {
     [selectedTemplate]
   );
 
+  const availableFields = useMemo(
+    () => getRecipeTargetFields(preparedRecipe ?? selectedRecipe),
+    [preparedRecipe, selectedRecipe]
+  );
+
+  const buildRecipeWithStandardization = useCallback(
+    (baseRecipe: RecipeDefinition | null) => {
+      const source = baseRecipe ?? selectedRecipe;
+      if (!source) {
+        throw new Error("No recipe available for standardization.");
+      }
+      const cloned = JSON.parse(JSON.stringify(source)) as RecipeDefinition;
+      let formatIndex = cloned.steps.findIndex((step) => step.type === "format");
+      let formatStep: FormatStep;
+      if (formatIndex === -1) {
+        formatStep = {
+          type: "format",
+          config: {
+            operations: []
+          }
+        };
+        const mapIndex = cloned.steps.findIndex((step) => step.type === "map_columns");
+        if (mapIndex === -1) {
+          cloned.steps.push(formatStep);
+        } else {
+          cloned.steps.splice(mapIndex + 1, 0, formatStep);
+        }
+      } else {
+        formatStep = cloned.steps[formatIndex] as FormatStep;
+      }
+
+      const existingOperations = [...(formatStep.config.operations ?? [])];
+      const preservedOperations = existingOperations.filter((operation) =>
+        !STANDARDIZATION_RULES.some((rule) => rule.matches(operation.field, operation.op))
+      );
+
+      const orderedFields = getRecipeTargetFields(cloned);
+      const newOperations: FormatOperation[] = [];
+
+      for (const field of orderedFields) {
+        const selectedRuleIds = standardizationSelections[field];
+        if (!selectedRuleIds || selectedRuleIds.length === 0) {
+          continue;
+        }
+        for (const ruleId of selectedRuleIds) {
+          const rule = STANDARDIZATION_RULES_MAP.get(ruleId);
+          if (rule) {
+            newOperations.push(rule.build(field));
+          }
+        }
+      }
+
+      formatStep.config.operations = [...preservedOperations, ...newOperations];
+      return cloned;
+    },
+    [selectedRecipe, standardizationSelections]
+  );
+
+  const toggleStandardization = useCallback(
+    (field: string, ruleId: string) => {
+      if (!availableFields.includes(field) || !STANDARDIZATION_RULES_MAP.has(ruleId)) {
+        return;
+      }
+      setStandardizationSelections((prev) => {
+        const current = new Set(prev[field] ?? []);
+        const hadRule = current.has(ruleId);
+        if (hadRule) {
+          current.delete(ruleId);
+        } else {
+          current.add(ruleId);
+        }
+
+        const nextValue = current.size === 0 ? [] : sortRuleIds(current);
+        const next = { ...prev };
+        if (nextValue.length === 0) {
+          if (!hadRule) {
+            return prev;
+          }
+          delete next[field];
+        } else {
+          next[field] = nextValue;
+        }
+
+        if (selectionMapsEqual(prev, next)) {
+          return prev;
+        }
+        return next;
+      });
+    },
+    [availableFields]
+  );
+
   const applyPreparedRecipe = useCallback(
     (recipe: RecipeDefinition | null) => {
       setPreparedRecipe(recipe);
+      const baseRecipe = recipe ?? selectedRecipe;
+      if (baseRecipe) {
+        const derivedSelections = deriveStandardizationSelectionsFromRecipe(baseRecipe);
+        const fields = getRecipeTargetFields(baseRecipe);
+        setStandardizationSelections((prev) => {
+          const next: Record<string, string[]> = {};
+          for (const field of fields) {
+            const derived = derivedSelections[field];
+            const fallback = prev[field] ?? [];
+            const chosen = derived && derived.length > 0 ? derived : fallback;
+            if (chosen.length > 0) {
+              next[field] = sortRuleIds(chosen);
+            }
+          }
+          if (selectionMapsEqual(prev, next)) {
+            return prev;
+          }
+          return next;
+        });
+      } else {
+        setStandardizationSelections((prev) => (Object.keys(prev).length === 0 ? prev : {}));
+      }
+
       if (!recipe) {
         setWriteBoardError(null);
         return;
       }
-      const writeStep = recipe.steps.find((step): step is WriteBackStep => step.type === "write_back");
+      const writeStep = recipe.steps.find(
+        (step): step is WriteBackStep => step.type === "write_back"
+      );
       const mapping = writeStep?.config?.columnMapping;
       if (!mapping || Object.keys(mapping).length === 0) {
         if (isBlankSelection) {
@@ -336,7 +666,7 @@ export default function BoardViewClient() {
         setWriteBoardError(null);
       }
     },
-    [isBlankSelection]
+    [isBlankSelection, selectedRecipe]
   );
 
   const getSessionToken = useCallback(async () => {
@@ -362,7 +692,7 @@ export default function BoardViewClient() {
         return "skipped" as const;
       }
 
-      const recipeForExecution = JSON.parse(JSON.stringify(baseRecipe)) as RecipeDefinition;
+      const recipeForExecution = buildRecipeWithStandardization(baseRecipe);
       const writeStep = recipeForExecution.steps.find(
         (step): step is WriteBackStep => step.type === "write_back"
       );
@@ -415,7 +745,7 @@ export default function BoardViewClient() {
         setIsSeedingBoard(false);
       }
     },
-    [context, getSessionToken, preparedRecipe, preview, selectedRecipe]
+    [buildRecipeWithStandardization, context, getSessionToken, preparedRecipe, preview, selectedRecipe]
   );
 
   const loadBoards = useCallback(async () => {
@@ -487,7 +817,7 @@ export default function BoardViewClient() {
             Authorization: `Bearer ${sessionToken}`
           },
           body: JSON.stringify({
-            recipe: selectedRecipe
+            recipe: buildRecipeWithStandardization(preparedRecipe ?? selectedRecipe)
           })
         });
         if (!response.ok) {
@@ -505,7 +835,15 @@ export default function BoardViewClient() {
         setPreparingWriteBoard(false);
       }
     },
-    [applyPreparedRecipe, boards, getSessionToken, preparedRecipe, selectedRecipe, sourceBoard?.boardId]
+    [
+      applyPreparedRecipe,
+      boards,
+      buildRecipeWithStandardization,
+      getSessionToken,
+      preparedRecipe,
+      selectedRecipe,
+      sourceBoard?.boardId
+    ]
   );
 
   const handleCreateBoard = useCallback(async () => {
@@ -524,7 +862,7 @@ export default function BoardViewClient() {
       setBoardsError(null);
       setWriteBoardError(null);
       const sessionToken = await getSessionToken();
-      const recipeForBoard = preparedRecipe ?? selectedRecipe;
+      const recipeForBoard = buildRecipeWithStandardization(preparedRecipe ?? selectedRecipe);
       const response = await fetch("/api/monday/boards", {
         method: "POST",
         headers: {
@@ -588,6 +926,7 @@ export default function BoardViewClient() {
     handleWriteBoardSelect,
     newBoardName,
     preparedRecipe,
+    buildRecipeWithStandardization,
     seedBoardWithPreview,
     selectedRecipe,
     selectedTemplate
@@ -760,7 +1099,7 @@ export default function BoardViewClient() {
             size="sm"
           >
             <Link href="/settings/monday" target="_blank" rel="noopener noreferrer">
-              Start
+              Auth
             </Link>
           </Button>
         </div>
@@ -801,7 +1140,57 @@ export default function BoardViewClient() {
 
         <Card>
           <CardHeader>
-            <CardTitle>2. Select data source</CardTitle>
+            <CardTitle>2. Configure standardization</CardTitle>
+            <CardDescription>
+              Choose how each mapped field should be cleaned before previewing or writing back.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {availableFields.length === 0 ? (
+              <p className="text-sm text-muted-foreground">
+                No target fields detected yet. Select a template or map columns to enable standardization options.
+              </p>
+            ) : (
+              <div className="space-y-4">
+                {availableFields.map((field) => {
+                  const selections = standardizationSelections[field] ?? [];
+                  return (
+                    <div key={field} className="space-y-2">
+                      <div className="flex items-center gap-2">
+                        <p className="text-sm font-medium">{formatFieldLabel(field)}</p>
+                        {selections.length > 0 && (
+                          <span className="rounded bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+                            {selections.length} selected
+                          </span>
+                        )}
+                      </div>
+                      <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                        {STANDARDIZATION_RULES.map((rule) => (
+                          <label key={rule.id} className="flex items-start gap-2 text-xs leading-tight">
+                            <input
+                              type="checkbox"
+                              className="mt-0.5 h-3.5 w-3.5"
+                              checked={selections.includes(rule.id)}
+                              onChange={() => toggleStandardization(field, rule.id)}
+                            />
+                            <span>
+                              <span className="font-medium">{rule.label}</span>
+                              <span className="block text-muted-foreground">{rule.description}</span>
+                            </span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>3. Select data source</CardTitle>
             <CardDescription>Preview via upload or directly from a monday board.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -903,7 +1292,7 @@ export default function BoardViewClient() {
                         },
                         body: JSON.stringify({
                           source: { type: "board", boardId: selectedBoardId },
-                          recipe: selectedRecipe,
+                          recipe: buildRecipeWithStandardization(preparedRecipe ?? selectedRecipe),
                           plan: context.plan
                         })
                       });
@@ -913,7 +1302,9 @@ export default function BoardViewClient() {
                       const result = (await response.json()) as PreviewResponse;
                       setPreview(result);
                       setSourceBoard(result.sourceBoard ?? null);
-                      const prepared = result.preparedRecipe ?? (result.sourceBoard ? null : selectedRecipe);
+                      const prepared =
+                        result.preparedRecipe ??
+                        (result.sourceBoard ? null : buildRecipeWithStandardization(selectedRecipe));
                       if (result.sourceBoard) {
                         await handleWriteBoardSelect(result.sourceBoard.boardId, {
                           prepared,
@@ -946,7 +1337,10 @@ export default function BoardViewClient() {
                     const formData = new FormData();
                     formData.set("file", uploadedFile);
                     formData.set("tenantId", context.tenantId);
-                    formData.set("recipe", JSON.stringify(selectedRecipe));
+                    formData.set(
+                      "recipe",
+                      JSON.stringify(buildRecipeWithStandardization(preparedRecipe ?? selectedRecipe))
+                    );
                     formData.set("plan", context.plan);
                     const response = await fetch("/api/recipes/run/preview", {
                       method: "POST",
@@ -960,7 +1354,9 @@ export default function BoardViewClient() {
                     }
                     const result = (await response.json()) as PreviewResponse;
                     setPreview(result);
-                    applyPreparedRecipe(selectedRecipe);
+                    applyPreparedRecipe(
+                      result.preparedRecipe ?? buildRecipeWithStandardization(selectedRecipe)
+                    );
                     setSourceBoard(null);
                     setToast({ message: "Preview ready", variant: "success" });
               } catch (error) {
@@ -1082,7 +1478,7 @@ export default function BoardViewClient() {
                     try {
                       const sessionToken = await getSessionToken();
                       const baseRecipe = preparedRecipe ?? selectedRecipe;
-                      const recipeForExecution = JSON.parse(JSON.stringify(baseRecipe)) as RecipeDefinition;
+                      const recipeForExecution = buildRecipeWithStandardization(baseRecipe);
                       const writeStep = recipeForExecution.steps.find(
                         (step): step is WriteBackStep => step.type === "write_back"
                       );
