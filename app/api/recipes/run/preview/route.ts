@@ -13,7 +13,7 @@ import { newId } from "@/lib/ids";
 import { createLogger } from "@/lib/logging";
 import type { Database } from "@/types/supabase";
 import { verifyMondaySessionToken } from "@/lib/security";
-import { boardItemsToRows, fetchBoardData, resolveOAuthToken } from "@/lib/mondayApi";
+import { boardItemsToRows, ensureBoardColumnsForRecipe, resolveOAuthToken } from "@/lib/mondayApi";
 import { prepareRecipeForBoard } from "@/lib/mondayRecipes";
 
 type TenantRecord = Pick<Database["public"]["Tables"]["tenants"]["Row"], "id" | "plan" | "seats">;
@@ -98,7 +98,11 @@ export async function POST(request: Request) {
         });
       }
 
-      const boardData = await fetchBoardData(accessToken, parsed.data.source.boardId, MAX_PREVIEW_ROWS);
+      const boardData = await ensureBoardColumnsForRecipe({
+        accessToken,
+        boardId: parsed.data.source.boardId,
+        recipe
+      });
       tableRows = boardItemsToRows(boardData);
       preparedRecipe = prepareRecipeForBoard(recipe, boardData);
       sourceBoard = { boardId: boardData.boardId, boardName: boardData.boardName };

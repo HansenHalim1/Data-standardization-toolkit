@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
 import { getServiceSupabase } from "@/lib/db";
 import { verifyMondaySessionToken } from "@/lib/security";
-import { fetchBoardData, resolveOAuthToken } from "@/lib/mondayApi";
+import { ensureBoardColumnsForRecipe, resolveOAuthToken } from "@/lib/mondayApi";
 import { prepareRecipeForBoard } from "@/lib/mondayRecipes";
 import type { RecipeDefinition } from "@/lib/recipe-engine";
 
@@ -49,7 +49,11 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
     }
 
     const recipe = parsed.data.recipe as RecipeDefinition;
-    const boardData = await fetchBoardData(accessToken, params.boardId);
+    const boardData = await ensureBoardColumnsForRecipe({
+      accessToken,
+      boardId: params.boardId,
+      recipe
+    });
     const preparedRecipe = prepareRecipeForBoard(recipe, boardData);
 
     return NextResponse.json({

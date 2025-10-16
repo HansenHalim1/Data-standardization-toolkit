@@ -563,6 +563,96 @@ export async function fetchBoardData(
   };
 }
 
+export async function ensureBoardColumnsForRecipe({
+  accessToken,
+  boardId,
+  recipe,
+  boardData,
+  client: providedClient
+}: {
+  accessToken: string;
+  boardId: string;
+  recipe: RecipeDefinition;
+  boardData?: MondayBoardData;
+  client?: ReturnType<typeof getApiClient>;
+}): Promise<MondayBoardData> {
+  const client = providedClient ?? getApiClient({ accessToken });
+  let currentBoard = boardData ?? (await fetchBoardData(accessToken, boardId));
+
+  const desiredFields = collectRecipeFields(recipe);
+  const existingColumns = new Set(
+    currentBoard.columns
+      .map((column) => normalizeColumnKey(column.title))
+      .filter((value) => value.length > 0)
+  );
+
+  const createdColumns: Column[] = [];
+  for (const field of desiredFields) {
+    const normalizedField = normalizeColumnKey(field);
+    if (!normalizedField || NORMALIZED_NAME_SKIP.has(normalizedField)) {
+      continue;
+    }
+    if (existingColumns.has(normalizedField)) {
+      continue;
+    }
+
+    const title = toColumnTitle(field);
+    const columnType = inferColumnType(field);
+
+    try {
+      const result = await client<{
+        create_column: { id: string; title?: string | null; type?: string | null };
+      }>({
+        query: `
+          mutation CreateColumn($boardId: ID!, $title: String!, $columnType: ColumnType!) {
+            create_column(board_id: $boardId, title: $title, column_type: $columnType) {
+              id
+              title
+              type
+            }
+          }
+        `,
+        variables: {
+          boardId,
+          title,
+          columnType
+        }
+      });
+
+      const createdColumn = result.create_column;
+      if (createdColumn?.id) {
+        const normalizedCreated = normalizeColumnKey(createdColumn.title ?? title);
+        if (normalizedCreated) {
+          existingColumns.add(normalizedCreated);
+        }
+        createdColumns.push({
+          id: createdColumn.id,
+          title: createdColumn.title ?? title,
+          type: createdColumn.type ?? columnType
+        });
+        logger.debug("Created monday column", {
+          boardId,
+          columnId: createdColumn.id,
+          title: createdColumn.title ?? title,
+          type: createdColumn.type ?? columnType
+        });
+      }
+    } catch (error) {
+      logger.warn("Failed to create monday column", {
+        boardId,
+        field,
+        error: (error as Error).message
+      });
+    }
+  }
+
+  if (createdColumns.length > 0) {
+    currentBoard = await fetchBoardData(accessToken, boardId);
+  }
+
+  return currentBoard;
+}
+
 export function boardItemsToRows(board: MondayBoardData): RecipeRow[] {
   const columnsById = new Map(board.columns.map((column) => [column.id, column.title]));
   return board.items.map((item) => {
@@ -646,77 +736,13 @@ export async function createBoardForRecipe({
   });
 
   let boardData = await fetchBoardData(accessToken, board.id);
-
-  const desiredFields = collectRecipeFields(recipe);
-  const existingColumns = new Set(
-    boardData.columns
-      .map((column) => normalizeColumnKey(column.title))
-      .filter((value) => value.length > 0)
-  );
-
-  const createdColumns: Column[] = [];
-  for (const field of desiredFields) {
-    const normalizedField = normalizeColumnKey(field);
-    if (!normalizedField || NORMALIZED_NAME_SKIP.has(normalizedField)) {
-      continue;
-    }
-    if (existingColumns.has(normalizedField)) {
-      continue;
-    }
-
-    const title = toColumnTitle(field);
-    const columnType = inferColumnType(field);
-
-    try {
-      const result = await client<{
-        create_column: { id: string; title?: string | null; type?: string | null };
-      }>({
-        query: `
-          mutation CreateColumn($boardId: ID!, $title: String!, $columnType: ColumnType!) {
-            create_column(board_id: $boardId, title: $title, column_type: $columnType) {
-              id
-              title
-              type
-            }
-          }
-        `,
-        variables: {
-          boardId: board.id,
-          title,
-          columnType
-        }
-      });
-
-      const createdColumn = result.create_column;
-      if (createdColumn?.id) {
-        const normalizedCreated = normalizeColumnKey(createdColumn.title ?? title);
-        if (normalizedCreated) {
-          existingColumns.add(normalizedCreated);
-        }
-        createdColumns.push({
-          id: createdColumn.id,
-          title: createdColumn.title ?? title,
-          type: createdColumn.type ?? columnType
-        });
-        logger.debug("Created monday column", {
-          boardId: board.id,
-          columnId: createdColumn.id,
-          title: createdColumn.title ?? title,
-          type: createdColumn.type ?? columnType
-        });
-      }
-    } catch (error) {
-      logger.warn("Failed to create monday column", {
-        boardId: board.id,
-        field,
-        error: (error as Error).message
-      });
-    }
-  }
-
-  if (createdColumns.length > 0) {
-    boardData = await fetchBoardData(accessToken, board.id);
-  }
+  boardData = await ensureBoardColumnsForRecipe({
+    accessToken,
+    boardId: board.id,
+    recipe,
+    boardData,
+    client
+  });
 
   return {
     boardData,
