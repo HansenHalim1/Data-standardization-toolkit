@@ -102,17 +102,53 @@ export async function POST(request: Request) {
     let seedSummary: { totalSuccess: number; totalFailed: number; results?: unknown } | null = null;
     if (seedRows && Array.isArray(seedRows) && seedRows.length > 0) {
       try {
-        // derive columnMapping from recipe write_back config if available
-        const writeStep = (recipeDefinition.steps || []).find((s: any) => s.type === 'write_back') as any;
-        const columnMapping = (writeStep && writeStep.config && writeStep.config.columnMapping) || {};
-        const keyColumn = writeStep?.config?.keyColumn;
-        const keyColumnId = writeStep?.config?.keyColumnId;
-        const itemNameField = writeStep?.config?.itemNameField;
+        // Build a mapping from source field (CSV header) -> monday column id using the created board columns.
+        const mapping: Record<string, string> = {};
+        const normalize = (v: string | null | undefined) =>
+          (v ?? "").toString().trim().toLowerCase().replace(/[^a-z0-9]/g, "");
+
+        // If client provided a `columns` array (CSV headers), prefer that list for mapping.
+        const headerCandidates: string[] = Array.isArray(columns) && columns.length > 0 ? columns : [];
+
+        for (const header of headerCandidates) {
+          const normHeader = normalize(header);
+          const match = boardData.columns.find((col) => {
+            const normTitle = normalize(col.title ?? col.id);
+            // match if normalized title equals normalized header or includes it
+            return (
+              normTitle === normHeader ||
+              normTitle.includes(normHeader) ||
+              normHeader.includes(normTitle)
+            );
+          });
+          if (match && match.id) {
+            mapping[header] = match.id;
+          }
+        }
+
+        // Fallback: if mapping is empty, try to derive mapping from recipe write_back.config.columnMapping
+        if (Object.keys(mapping).length === 0) {
+          const writeStep = (recipeDefinition.steps || []).find((s: any) => s.type === 'write_back') as any;
+          const recipeMapping: Record<string, string> = (writeStep && writeStep.config && writeStep.config.columnMapping) || {};
+          for (const [field, target] of Object.entries(recipeMapping)) {
+            // try to resolve target to a column id by matching title/id
+            const normTarget = normalize(String(target));
+            const match = boardData.columns.find((col) => normalize(col.id) === normTarget || normalize(col.title ?? col.id) === normTarget);
+            if (match && match.id) {
+              mapping[field] = match.id;
+            }
+          }
+        }
+
+        const keyStep = (recipeDefinition.steps || []).find((s: any) => s.type === 'write_back') as any;
+        const keyColumn = keyStep?.config?.keyColumn;
+        const keyColumnId = keyStep?.config?.keyColumnId;
+        const itemNameField = keyStep?.config?.itemNameField;
 
         const result = await upsertRowsToBoardBatchSafe({
           accessToken,
           boardId: summary.id,
-          columnMapping: columnMapping,
+          columnMapping: mapping,
           rows: seedRows,
           keyColumn,
           keyColumnId,
