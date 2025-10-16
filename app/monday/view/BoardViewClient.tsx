@@ -73,7 +73,137 @@ type StandardizationTarget = {
   label: string;
 };
 
+function deriveSplitNameFields(field: string): { first: string; last: string } {
+  const defaults = { first: "first_name", last: "last_name" };
+  if (!field) {
+    return defaults;
+  }
+  const withoutName = field.replace(/name$/i, "").replace(/[_\s]+$/g, "");
+  const withoutFull = withoutName.replace(/full$/i, "").replace(/[_\s]+$/g, "");
+  const base = withoutFull.length > 0 ? withoutFull : withoutName;
+  if (!base) {
+    return defaults;
+  }
+  const sanitized = base.endsWith("_") ? base.slice(0, -1) : base;
+  const prefix = sanitized ? `${sanitized}_` : "";
+  return {
+    first: `${prefix}first_name`,
+    last: `${prefix}last_name`
+  };
+}
+
 const STANDARDIZATION_RULES: StandardizationRule[] = [
+  {
+    id: "trim_collapse_whitespace",
+    label: "Trim & collapse whitespace",
+    description: "Removes leading/trailing spaces and collapses internal whitespace.",
+    build: (field) => ({
+      field,
+      op: { kind: "trim_collapse_whitespace" }
+    }),
+    matches: (_field, op) => op.kind === "trim_collapse_whitespace"
+  },
+  {
+    id: "standardize_boolean",
+    label: "Standardize booleans",
+    description: "Converts common yes/no values into true/false.",
+    build: (field) => ({
+      field,
+      op: { kind: "boolean_standardize" }
+    }),
+    matches: (_field, op) => op.kind === "boolean_standardize"
+  },
+  {
+    id: "timezone_to_utc",
+    label: "Normalize timezone",
+    description: "Converts datetimes to UTC ISO strings.",
+    build: (field) => ({
+      field,
+      op: { kind: "timezone_to_utc" }
+    }),
+    matches: (_field, op) => op.kind === "timezone_to_utc"
+  },
+  {
+    id: "slugify",
+    label: "Slugify text",
+    description: "Generates URL-safe slugs (lowercase with dashes).",
+    build: (field) => ({
+      field,
+      op: { kind: "slugify", separator: "-" }
+    }),
+    matches: (_field, op) => op.kind === "slugify" && (op.separator ?? "-") === "-"
+  },
+  {
+    id: "round_numeric",
+    label: "Round to currency",
+    description: "Rounds numbers to two decimal places.",
+    build: (field) => ({
+      field,
+      op: { kind: "round_numeric", precision: 2 }
+    }),
+    matches: (_field, op) => op.kind === "round_numeric" && (op.precision ?? 2) === 2
+  },
+  {
+    id: "normalize_percentage",
+    label: "Normalize percentages",
+    description: "Converts % values into decimal form (e.g., 45% → 0.45).",
+    build: (field) => ({
+      field,
+      op: { kind: "normalize_percentage" }
+    }),
+    matches: (_field, op) => op.kind === "normalize_percentage"
+  },
+  {
+    id: "remove_special_characters",
+    label: "Remove special characters",
+    description: "Strips zero-width and non-printable characters.",
+    build: (field) => ({
+      field,
+      op: { kind: "remove_special_characters" }
+    }),
+    matches: (_field, op) => op.kind === "remove_special_characters"
+  },
+  {
+    id: "split_full_name",
+    label: "Split full name",
+    description: "Splits a full name into first/last name fields.",
+    build: (field) => {
+      const { first, last } = deriveSplitNameFields(field);
+      return {
+        field,
+        op: { kind: "split_name", firstNameField: first, lastNameField: last }
+      };
+    },
+    matches: (field, op) => {
+      if (op.kind !== "split_name") {
+        return false;
+      }
+      const { first, last } = deriveSplitNameFields(field);
+      const opFirst = op.firstNameField ?? first;
+      const opLast = op.lastNameField ?? last;
+      return opFirst === first && opLast === last;
+    }
+  },
+  {
+    id: "normalize_address",
+    label: "Normalize address",
+    description: "Title-cases address parts and uppercases state codes.",
+    build: (field) => ({
+      field,
+      op: { kind: "normalize_address" }
+    }),
+    matches: (_field, op) => op.kind === "normalize_address"
+  },
+  {
+    id: "sanitize_html",
+    label: "Sanitize HTML",
+    description: "Removes unsupported HTML/markdown tags.",
+    build: (field) => ({
+      field,
+      op: { kind: "sanitize_html" }
+    }),
+    matches: (_field, op) => op.kind === "sanitize_html"
+  },
   {
     id: "title_case",
     label: "Title case",

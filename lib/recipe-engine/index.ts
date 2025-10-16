@@ -41,7 +41,21 @@ export type FormatStep = {
         | { kind: "iso_country" }
         | { kind: "iso_state"; countryField?: string }
         | { kind: "currency_code" }
-        | { kind: "number_parse"; locale?: string };
+        | { kind: "number_parse"; locale?: string }
+        | { kind: "trim_collapse_whitespace" }
+        | { kind: "boolean_standardize" }
+        | { kind: "timezone_to_utc" }
+        | { kind: "slugify"; separator?: string }
+        | { kind: "round_numeric"; precision?: number }
+        | { kind: "normalize_percentage" }
+        | { kind: "remove_special_characters" }
+        | {
+            kind: "split_name";
+            firstNameField?: string;
+            lastNameField?: string;
+          }
+        | { kind: "normalize_address" }
+        | { kind: "sanitize_html" };
     }>;
   };
 };
