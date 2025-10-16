@@ -429,13 +429,34 @@ function roundNumericValue(value: unknown, precision: number): number | undefine
   if (typeof value === "number") {
     numeric = value;
   } else if (typeof value === "string") {
-    const sanitized = value.replace(/,/g, "").trim();
-    if (sanitized.length === 0) {
+    const trimmed = value.trim();
+    if (!trimmed) {
       return undefined;
+    }
+    const negativeViaParens = /^\(.*\)$/.test(trimmed);
+    let sanitized = trimmed.replace(/[^0-9.,\-]/g, "");
+    if (negativeViaParens) {
+      sanitized = sanitized.replace(/[()]/g, "");
+    }
+    if (!sanitized) {
+      return undefined;
+    }
+    const hasComma = sanitized.includes(",");
+    const hasDot = sanitized.includes(".");
+    if (hasComma && hasDot) {
+      if (sanitized.lastIndexOf(",") > sanitized.lastIndexOf(".")) {
+        sanitized = sanitized.replace(/\./g, "").replace(/,/g, ".");
+      } else {
+        sanitized = sanitized.replace(/,/g, "");
+      }
+    } else if (hasComma && !hasDot) {
+      sanitized = sanitized.replace(/,/g, ".");
+    } else {
+      sanitized = sanitized.replace(/,/g, "");
     }
     const parsed = Number.parseFloat(sanitized);
     if (!Number.isNaN(parsed)) {
-      numeric = parsed;
+      numeric = negativeViaParens ? -parsed : parsed;
     }
   }
   if (numeric === null || !Number.isFinite(numeric)) {
@@ -497,7 +518,8 @@ function resolveNameField(
     return suffix;
   }
   const sanitizedBase = base.endsWith("_") ? base.slice(0, -1) : base;
-  const prefix = sanitizedBase ? `${sanitizedBase}_` : "";
+  const normalizedBase = sanitizedBase.toLowerCase() === "full" ? "" : sanitizedBase;
+  const prefix = normalizedBase ? `${normalizedBase}_` : "";
   return `${prefix}${suffix}`;
 }
 
@@ -517,6 +539,8 @@ function normalizeAddress(value: string): string {
   return formattedSegments.join(", ");
 }
 
+const DIRECTIONAL_WORDS = new Set(["n", "s", "e", "w", "ne", "nw", "se", "sw"]);
+
 function formatAddressWord(word: string, isLastSegment: boolean): string {
   if (!word) {
     return word;
@@ -524,14 +548,29 @@ function formatAddressWord(word: string, isLastSegment: boolean): string {
   if (/^\d/.test(word)) {
     return word;
   }
-  if (/^[A-Za-z]{1,3}$/.test(word)) {
-    return word.toUpperCase();
+
+  const match = word.match(/^([A-Za-z]+)(.*)$/);
+  if (!match) {
+    return word;
   }
-  if (isLastSegment && /^[A-Za-z]{2,3}$/.test(word)) {
-    return word.toUpperCase();
+  const [, letters, suffix] = match;
+  const lowerLetters = letters.toLowerCase();
+
+  if (isLastSegment && /^[A-Za-z]{2,3}$/.test(lowerLetters)) {
+    return lowerLetters.toUpperCase() + suffix;
   }
-  const lower = word.toLowerCase();
-  return lower.charAt(0).toUpperCase() + lower.slice(1);
+
+  if (DIRECTIONAL_WORDS.has(lowerLetters)) {
+    return lowerLetters.toUpperCase() + suffix;
+  }
+
+  if (lowerLetters.length <= 3) {
+    const capitalized = lowerLetters.charAt(0).toUpperCase() + lowerLetters.slice(1);
+    return capitalized + suffix;
+  }
+
+  const capitalized = lowerLetters.charAt(0).toUpperCase() + lowerLetters.slice(1);
+  return capitalized + suffix;
 }
 
 function sanitizeHtmlValue(value: string): string {

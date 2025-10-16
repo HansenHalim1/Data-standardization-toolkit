@@ -89,7 +89,8 @@ function deriveSplitNameFields(field: string): { first: string; last: string } {
     return defaults;
   }
   const sanitized = base.endsWith("_") ? base.slice(0, -1) : base;
-  const prefix = sanitized ? `${sanitized}_` : "";
+  const normalizedBase = sanitized.toLowerCase() === "full" ? "" : sanitized;
+  const prefix = normalizedBase ? `${normalizedBase}_` : "";
   return {
     first: `${prefix}first_name`,
     last: `${prefix}last_name`
@@ -1475,6 +1476,7 @@ useEffect(() => {
                           boardName: result.sourceBoard.boardName,
                           boardColumns: previewBoardColumns
                         });
+                        setSelectedBoardId(result.sourceBoard.boardId);
                       } else {
                         applyPreparedRecipe(prepared ?? null);
                         setWriteBoardId("");
