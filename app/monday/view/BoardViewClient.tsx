@@ -23,6 +23,47 @@ import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
 
+function exportRowsToCSV(rows: Record<string, unknown>[], filename = "standardized-data.csv") {
+  if (!rows || rows.length === 0) {
+    alert("No data to export.");
+    return;
+  }
+
+  // Collect all unique columns
+  const columns = Array.from(
+    rows.reduce((set, row) => {
+      Object.keys(row).forEach((key) => set.add(key));
+      return set;
+    }, new Set<string>())
+  );
+
+  // Build CSV content
+  const csvContent = [
+    columns.join(","), // header
+    ...rows.map((row) =>
+      columns
+        .map((col) => {
+          const value = row[col];
+          if (value == null) return "";
+          const str = String(value).replace(/"/g, '""');
+          return `"${str}"`;
+        })
+        .join(",")
+    ),
+  ].join("\n");
+
+  // Trigger browser download
+  const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
+
 type MondayContext = {
   tenantId: string;
   plan: string;
@@ -639,6 +680,7 @@ export default function BoardViewClient() {
   const [standardizationSelections, setStandardizationSelections] = useState<Record<string, string[]>>({});
   const [boardColumnNames, setBoardColumnNames] = useState<Record<string, string>>({});
   const [fileColumns, setFileColumns] = useState<string[]>([]);
+  const [exportMode, setExportMode] = useState<"all" | "changed">("all");
   const [unmappedBoardFields, setUnmappedBoardFields] = useState<string[]>([]);
   const unmappedFieldsRef = useRef<string[]>([]);
 
@@ -1927,6 +1969,46 @@ useEffect(() => {
               >
                 {isExecuting ? "Running..." : "Run write-back"}
               </Button>
+
+              {/* Export CSV: allow exporting all rows or only changed rows */}
+              <div className="flex items-center gap-2">
+                <Label>Export</Label>
+                <Select
+                  value={exportMode}
+                  onChange={(e) => setExportMode(e.target.value as "all" | "changed")}
+                  className="w-48"
+                >
+                  <option value="all">All rows</option>
+                  <option value="changed">Changed rows only</option>
+                </Select>
+
+                <Button
+                  onClick={() => {
+                    if (!preview || !preview.rows || preview.rows.length === 0) {
+                      setToast({ message: "No data to export.", variant: "error" });
+                      return;
+                    }
+                    const rowsToExport =
+                      exportMode === "all"
+                        ? preview.rows
+                        : (() => {
+                            const changed = new Set<number>(preview.diff.map((d) => d.rowIndex));
+                            return preview.rows.filter((_, idx) => changed.has(idx));
+                          })();
+
+                    if (!rowsToExport || rowsToExport.length === 0) {
+                      setToast({ message: "No rows match the selection.", variant: "error" });
+                      return;
+                    }
+
+                    exportRowsToCSV(rowsToExport, `standardized-${exportMode}.csv`);
+                    setToast({ message: `Exported ${rowsToExport.length} rows.`, variant: "success" });
+                  }}
+                  disabled={!preview || isPreviewing || preview.rows.length === 0}
+                >
+                  Export to CSV
+                </Button>
+              </div>
             </CardContent>
           </Card>
           {/* === End Diff & Actions === */}
