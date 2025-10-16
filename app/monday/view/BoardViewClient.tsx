@@ -997,23 +997,25 @@ export default function BoardViewClient() {
     };
   }, [dataSource, loadBoards, mondayClient]);
 
-  useEffect(() => {
-    setPreview(null);
-    applyPreparedRecipe(null);
-    setSourceBoard(null);
-    setBoardsError(null);
-    setWriteBoardId("");
-    setWriteBoardName("");
-    setPreparingWriteBoard(false);
-    setNewBoardName("");
-    if (dataSource === "file") {
-      setSelectedBoardId("");
-      setBoardColumnNames({});
-    } else {
-      setUploadedFile(null);
-      setFileColumns([]);
-    }
-  }, [applyPreparedRecipe, dataSource]);
+useEffect(() => {
+  setPreview(null);
+  setPreparedRecipe(null);
+  setStandardizationSelections((prev) => (Object.keys(prev).length === 0 ? prev : {}));
+  setSourceBoard(null);
+  setBoardsError(null);
+  setWriteBoardId("");
+  setWriteBoardName("");
+  setPreparingWriteBoard(false);
+  setWriteBoardError(null);
+  setNewBoardName("");
+  if (dataSource === "file") {
+    setSelectedBoardId("");
+    setBoardColumnNames({});
+  } else {
+    setUploadedFile(null);
+    setFileColumns([]);
+  }
+}, [dataSource]);
 
   useEffect(() => {
     if (!writeBoardId) {
