@@ -1326,27 +1326,23 @@ useEffect(() => {
       );
       if (!write) return clone;
 
-      // Helper: clean up column names for comparison
       const normalize = (s: string) =>
         s
           .toLowerCase()
-          .normalize("NFKD") // remove weird unicode spaces
+          .normalize("NFKD") // strip weird unicode chars
           .replace(/[^a-z0-9]/g, "");
 
-      // Use human-friendly titles for board source; file headers for file source
+      // Always compare friendly names (titles)
       const allTargets =
         dataSource === "board"
           ? Object.values(boardColumnNames)
           : fileColumns;
 
-      // Go through all unmapped fields
       for (const sourceField of allTargets) {
         const alreadyMapped = write.config.columnMapping?.[sourceField];
         if (alreadyMapped) continue;
 
         const normalizedSource = normalize(sourceField);
-
-        // Fuzzy match: tolerate minor differences
         const autoMatch = Object.entries(boardColumnNames).find(
           ([, name]) => {
             const normalizedName = normalize(name);
@@ -1361,14 +1357,13 @@ useEffect(() => {
         );
 
         if (autoMatch) {
-          const [autoId] = autoMatch;
+          const [autoId, name] = autoMatch;
           write.config.columnMapping = {
             ...(write.config.columnMapping ?? {}),
-            [sourceField]: autoId,
+            [name]: autoId, // ✅ key by friendly title
           };
         }
       }
-
       return clone;
     });
   }, [boardColumnNames, fileColumns, dataSource]);
@@ -1788,9 +1783,10 @@ useEffect(() => {
 
               {/* === Mapping UI start === */}
 {(() => {
+  // Use friendly names for both board + file sources
   const sourceFields =
     dataSource === "board" && Object.keys(boardColumnNames).length > 0
-      ? Object.keys(boardColumnNames)
+      ? Object.values(boardColumnNames)
       : fileColumns;
 
   return (
@@ -1807,25 +1803,13 @@ useEffect(() => {
               (s): s is WriteBackStep => s.type === "write_back"
             );
             const selected = writeStep?.config?.columnMapping?.[sourceField] ?? "";
-            const friendlyName =
-              selected && boardColumnNames[selected]
-                ? boardColumnNames[selected]
-                : "";
-            const leftLabel = boardColumnNames[sourceField] ?? sourceField;
 
             return (
               <div
                 key={sourceField}
                 className="flex items-center justify-between gap-2 border rounded-md px-2 py-1"
               >
-                <span className="text-sm">
-                  {leftLabel}
-                  {friendlyName && leftLabel !== friendlyName && (
-                    <span className="ml-2 text-xs text-muted-foreground">
-                      → {friendlyName}
-                    </span>
-                  )}
-                </span>
+                <span className="text-sm">{sourceField}</span>
                 <Select
                   value={selected}
                   onChange={(e) => {
@@ -1861,6 +1845,7 @@ useEffect(() => {
   );
 })()}
 {/* === Mapping UI end === */}
+
 
 
 
