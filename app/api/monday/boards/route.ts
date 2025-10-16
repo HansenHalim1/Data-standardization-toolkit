@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getServiceSupabase } from "@/lib/db";
 import { verifyMondaySessionToken } from "@/lib/security";
-import { createBoardForRecipe, fetchBoards, resolveOAuthToken } from "@/lib/mondayApi";
+import { createBoardForRecipe, fetchBoards, resolveOAuthToken, upsertRowsToBoardBatchSafe } from "@/lib/mondayApi";
 import { createLogger } from "@/lib/logging";
 import { prepareRecipeForBoard } from "@/lib/mondayRecipes";
 import type { RecipeDefinition } from "@/lib/recipe-engine";
@@ -51,6 +51,7 @@ const createBoardSchema = z.object({
   boardKind: z.enum(["public", "private", "share"]).optional(),
   workspaceId: z.union([z.string(), z.number()]).optional(),
   columns: z.array(z.string()).optional(),
+  seedRows: z.array(z.record(z.any())).optional(),
   recipe: recipeSchema
 });
 
@@ -72,7 +73,7 @@ export async function POST(request: Request) {
       return NextResponse.json(parsed.error.flatten(), { status: 400 });
     }
 
-  const { name, boardKind, workspaceId, recipe, columns } = parsed.data;
+  const { name, boardKind, workspaceId, recipe, columns, seedRows } = parsed.data;
     const recipeDefinition = recipe as RecipeDefinition;
     const resolvedBoardKind = boardKind ?? "share";
 
@@ -97,6 +98,36 @@ export async function POST(request: Request) {
       extraColumns: columns ?? undefined
     });
 
+    // If seedRows were provided, attempt to seed them into the created board.
+    let seedSummary: { totalSuccess: number; totalFailed: number; results?: unknown } | null = null;
+    if (seedRows && Array.isArray(seedRows) && seedRows.length > 0) {
+      try {
+        // derive columnMapping from recipe write_back config if available
+        const writeStep = (recipeDefinition.steps || []).find((s: any) => s.type === 'write_back') as any;
+        const columnMapping = (writeStep && writeStep.config && writeStep.config.columnMapping) || {};
+        const keyColumn = writeStep?.config?.keyColumn;
+        const keyColumnId = writeStep?.config?.keyColumnId;
+        const itemNameField = writeStep?.config?.itemNameField;
+
+        const result = await upsertRowsToBoardBatchSafe({
+          accessToken,
+          boardId: summary.id,
+          columnMapping: columnMapping,
+          rows: seedRows,
+          keyColumn,
+          keyColumnId,
+          itemNameField,
+          batchSize: 10,
+          delayMs: 300,
+          maxRetries: 3
+        });
+        seedSummary = { totalSuccess: result.totalSuccess, totalFailed: result.totalFailed, results: result.results };
+      } catch (err) {
+        logger.warn('Seeding rows to created board failed', { error: (err as Error).message });
+        // keep seedSummary null to indicate seeding failed
+      }
+    }
+
     const preparedRecipe = prepareRecipeForBoard(recipeDefinition, boardData);
 
     logger.info("Created monday board via API", {
@@ -116,7 +147,8 @@ export async function POST(request: Request) {
           title: column.title ?? column.id
         }))
       },
-      preparedRecipe
+      preparedRecipe,
+      seedSummary
     });
   } catch (error) {
     const message = (error as Error).message || "Unauthorized";
