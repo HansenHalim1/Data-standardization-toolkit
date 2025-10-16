@@ -50,6 +50,7 @@ const createBoardSchema = z.object({
   name: z.string().trim().min(1, "Board name is required").max(120, "Board name is too long"),
   boardKind: z.enum(["public", "private", "share"]).optional(),
   workspaceId: z.union([z.string(), z.number()]).optional(),
+  columns: z.array(z.string()).optional(),
   recipe: recipeSchema
 });
 
@@ -71,7 +72,7 @@ export async function POST(request: Request) {
       return NextResponse.json(parsed.error.flatten(), { status: 400 });
     }
 
-    const { name, boardKind, workspaceId, recipe } = parsed.data;
+  const { name, boardKind, workspaceId, recipe, columns } = parsed.data;
     const recipeDefinition = recipe as RecipeDefinition;
     const resolvedBoardKind = boardKind ?? "share";
 
@@ -92,7 +93,8 @@ export async function POST(request: Request) {
       recipe: recipeDefinition,
       boardName: name,
       boardKind: resolvedBoardKind,
-      workspaceId: workspaceIdNumber
+      workspaceId: workspaceIdNumber,
+      extraColumns: columns ?? undefined
     });
 
     const preparedRecipe = prepareRecipeForBoard(recipeDefinition, boardData);

@@ -1337,7 +1337,31 @@ async function parseCsvFileToRows(file: File): Promise<Record<string, unknown>[]
             if (!parsed || parsed.length === 0) {
               setToast({ message: "Uploaded CSV contains no rows to seed.", variant: "error" });
             } else {
-              seedResult = await seedBoardWithRows(result.board.boardId, result.board.boardName, result.preparedRecipe, parsed);
+              // Try to auto-derive a columnMapping from CSV headers -> new board columns
+              const headerKeys = Object.keys(parsed[0]);
+              const boardCols = result.board.columns ?? [];
+              const mapping: Record<string, string> = {};
+              const normalize = (s: string | undefined) => (s ?? "").toString().trim().toLowerCase().replace(/[^a-z0-9]/g, "");
+              const normalizedBoard = boardCols.map((c) => ({ id: c.id, title: c.title ?? "", norm: normalize(c.title) }));
+              for (const header of headerKeys) {
+                const targetNorm = normalize(header);
+                const match = normalizedBoard.find((b) => b.norm === targetNorm) || normalizedBoard.find((b) => b.norm.includes(targetNorm) || targetNorm.includes(b.norm));
+                if (match) {
+                  mapping[header] = match.id;
+                }
+              }
+
+              // Prepare a recipe with the mapping injected so seeding won't be skipped
+              const preparedClone = structuredClone(result.preparedRecipe ?? BLANK_RECIPE) as RecipeDefinition;
+              const writeStep = preparedClone.steps.find((s): s is WriteBackStep => s.type === "write_back");
+              if (writeStep) {
+                writeStep.config.columnMapping = {
+                  ...(writeStep.config.columnMapping ?? {}),
+                  ...mapping
+                };
+              }
+
+              seedResult = await seedBoardWithRows(result.board.boardId, result.board.boardName, preparedClone, parsed);
             }
           } catch (err) {
             setToast({ message: `Failed to parse uploaded CSV: ${(err as Error).message}`, variant: "error" });

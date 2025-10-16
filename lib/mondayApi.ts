@@ -676,13 +676,15 @@ export async function createBoardForRecipe({
   recipe,
   boardName,
   boardKind = "share",
-  workspaceId
+  workspaceId,
+  extraColumns
 }: {
   accessToken: string;
   recipe: RecipeDefinition;
   boardName: string;
   boardKind?: MondayBoardKind;
   workspaceId?: number | string;
+  extraColumns?: string[];
 }): Promise<{ boardData: MondayBoardData; summary: BoardCreationSummary }> {
   const client = getApiClient({ accessToken });
   const variables: {
@@ -736,13 +738,32 @@ export async function createBoardForRecipe({
   });
 
   let boardData = await fetchBoardData(accessToken, board.id);
-  boardData = await ensureBoardColumnsForRecipe({
-    accessToken,
-    boardId: board.id,
-    recipe,
-    boardData,
-    client
-  });
+  // If extraColumns provided (CSV headers), ensure these columns exist too
+  if (extraColumns && Array.isArray(extraColumns) && extraColumns.length > 0) {
+    // Build a synthetic recipe that includes these fields as desired fields
+    const syntheticRecipe = JSON.parse(JSON.stringify(recipe)) as RecipeDefinition;
+    // Inject a write_back columnMapping so ensureBoardColumnsForRecipe will create columns
+    const writeStep = syntheticRecipe.steps.find((s): s is WriteBackStep => s.type === "write_back");
+    if (writeStep) {
+      writeStep.config.columnMapping = {
+        ...(writeStep.config.columnMapping ?? {}),
+      };
+      for (const col of extraColumns) {
+        if (col && typeof col === "string") {
+          writeStep.config.columnMapping[col] = col;
+        }
+      }
+    }
+    boardData = await ensureBoardColumnsForRecipe({ accessToken, boardId: board.id, recipe: syntheticRecipe, boardData, client });
+  } else {
+    boardData = await ensureBoardColumnsForRecipe({
+      accessToken,
+      boardId: board.id,
+      recipe,
+      boardData,
+      client
+    });
+  }
 
   return {
     boardData,
