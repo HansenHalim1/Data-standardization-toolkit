@@ -677,6 +677,68 @@ export default function BoardViewClient() {
   const [newBoardName, setNewBoardName] = useState<string>("");
   const [isCreatingBoard, setIsCreatingBoard] = useState(false);
   const [isSeedingBoard, setIsSeedingBoard] = useState(false);
+  const [seedSourceMode, setSeedSourceMode] = useState<"preview" | "original">("preview");
+
+async function parseCsvFileToRows(file: File): Promise<Record<string, unknown>[]> {
+  const text = await file.text();
+  // Minimal CSV parser: handles quoted fields and escaped quotes.
+  const rows: string[][] = [];
+  let cur: string[] = [];
+  let curField = "";
+  let inQuotes = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (i + 1 < text.length && text[i + 1] === '"') {
+          curField += '"';
+          i += 1;
+        } else {
+          inQuotes = false;
+        }
+      } else {
+        curField += ch;
+      }
+    } else {
+      if (ch === '"') {
+        inQuotes = true;
+      } else if (ch === ',') {
+        cur.push(curField);
+        curField = "";
+      } else if (ch === '\r') {
+        // ignore
+      } else if (ch === '\n') {
+        cur.push(curField);
+        rows.push(cur);
+        cur = [];
+        curField = "";
+      } else {
+        curField += ch;
+      }
+    }
+  }
+  if (inQuotes) {
+    cur.push(curField);
+    rows.push(cur);
+  } else if (curField !== "" || cur.length > 0) {
+    cur.push(curField);
+    rows.push(cur);
+  }
+
+  if (rows.length === 0) return [];
+  const header = rows[0].map((h) => (h ?? "").toString().trim());
+  const out: Record<string, unknown>[] = [];
+  for (let r = 1; r < rows.length; r++) {
+    const row = rows[r];
+    if (!row) continue;
+    const obj: Record<string, unknown> = {};
+    for (let c = 0; c < header.length; c++) {
+      obj[header[c]] = c < row.length ? row[c] : null;
+    }
+    out.push(obj);
+  }
+  return out;
+}
   const [standardizationSelections, setStandardizationSelections] = useState<Record<string, string[]>>({});
   const [boardColumnNames, setBoardColumnNames] = useState<Record<string, string>>({});
   const [fileColumns, setFileColumns] = useState<string[]>([]);
@@ -994,6 +1056,68 @@ export default function BoardViewClient() {
     [buildRecipeWithStandardization, context, getSessionToken, preparedRecipe, preview, selectedRecipe]
   );
 
+  const seedBoardWithRows = useCallback(
+    async (
+      boardId: string,
+      boardName: string,
+      prepared: RecipeDefinition | null,
+      rows: Record<string, unknown>[]
+    ) => {
+      if (!rows || rows.length === 0 || !context) {
+        return "skipped" as const;
+      }
+
+      const baseRecipe = prepared ?? preparedRecipe ?? BLANK_RECIPE;
+      if (!baseRecipe) {
+        return "skipped" as const;
+      }
+
+      const recipeForExecution = buildRecipeWithStandardization(baseRecipe);
+      const writeStep = recipeForExecution.steps.find(
+        (step): step is WriteBackStep => step.type === "write_back"
+      );
+      if (!writeStep) {
+        return "skipped" as const;
+      }
+
+      writeStep.config.boardId = boardId;
+      if (!writeStep.config.columnMapping || Object.keys(writeStep.config.columnMapping).length === 0) {
+        return "skipped" as const;
+      }
+
+      try {
+        setIsSeedingBoard(true);
+        setToast({ message: `Seeding ${rows.length} rows into "${boardName}"...`, variant: "default" });
+        const sessionToken = await getSessionToken();
+        const response = await fetch("/api/recipes/run/execute", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${sessionToken}`
+          },
+          body: JSON.stringify({
+            tenantId: context.tenantId,
+            recipe: recipeForExecution,
+            previewRows: rows,
+            plan: context.plan
+          })
+        });
+        if (!response.ok) {
+          throw new Error(await response.text());
+        }
+        const result = (await response.json()) as { rowsWritten: number };
+        setToast({ message: `Board "${boardName}" seeded with ${result.rowsWritten} rows.`, variant: "success" });
+        return "seeded" as const;
+      } catch (error) {
+        setToast({ message: `Board created but seeding failed: ${(error as Error).message}`, variant: "error" });
+        return "failed" as const;
+      } finally {
+        setIsSeedingBoard(false);
+      }
+    },
+    [buildRecipeWithStandardization, context, getSessionToken, preparedRecipe]
+  );
+
   const loadBoards = useCallback(async () => {
     const sessionToken = await getSessionToken();
     const response = await fetch("/api/monday/boards", {
@@ -1201,11 +1325,25 @@ export default function BoardViewClient() {
         boardColumns: result.board.columns ?? []
       });
       setNewBoardName("");
-      const seedResult = await seedBoardWithPreview(
-        result.board.boardId,
-        result.board.boardName,
-        result.preparedRecipe
-      );
+      let seedResult: "skipped" | "seeded" | "failed" = "skipped";
+      if (seedSourceMode === "preview") {
+        seedResult = await seedBoardWithPreview(result.board.boardId, result.board.boardName, result.preparedRecipe);
+      } else {
+        if (!uploadedFile) {
+          setToast({ message: "No uploaded CSV available to seed from.", variant: "error" });
+        } else {
+          try {
+            const parsed = await parseCsvFileToRows(uploadedFile);
+            if (!parsed || parsed.length === 0) {
+              setToast({ message: "Uploaded CSV contains no rows to seed.", variant: "error" });
+            } else {
+              seedResult = await seedBoardWithRows(result.board.boardId, result.board.boardName, result.preparedRecipe, parsed);
+            }
+          } catch (err) {
+            setToast({ message: `Failed to parse uploaded CSV: ${(err as Error).message}`, variant: "error" });
+          }
+        }
+      }
       if (seedResult === "skipped") {
         setToast({
           message: `Created board "${result.board.boardName}".`,
@@ -1783,7 +1921,7 @@ useEffect(() => {
                 </div>
 
                 {/* New board creation */}
-                <div className="flex flex-col gap-2 sm:flex-row">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
                   <Input
                     value={newBoardName}
                     onChange={(e) => setNewBoardName(e.target.value)}
@@ -1791,23 +1929,34 @@ useEffect(() => {
                     className="sm:flex-1"
                     disabled={isCreatingBoard || isPreparingWriteBoard || isSeedingBoard}
                   />
-                  <Button
-                    type="button"
-                    size="sm"
-                    onClick={handleCreateBoard}
-                    disabled={
-                      isCreatingBoard ||
-                      isPreparingWriteBoard ||
-                      isSeedingBoard ||
-                      !newBoardName.trim()
-                    }
-                  >
-                    {isCreatingBoard
-                      ? "Creating..."
-                      : isSeedingBoard
-                      ? "Seeding..."
-                      : "Create board"}
-                  </Button>
+                  <div className="flex items-center gap-2">
+                    <Select
+                      value={seedSourceMode}
+                      onChange={(e) => setSeedSourceMode(e.target.value as "preview" | "original")}
+                      className="w-40"
+                      disabled={!uploadedFile && seedSourceMode === "original"}
+                    >
+                      <option value="preview">Seed from preview</option>
+                      <option value="original">Seed from original CSV</option>
+                    </Select>
+                    <Button
+                      type="button"
+                      size="sm"
+                      onClick={handleCreateBoard}
+                      disabled={
+                        isCreatingBoard ||
+                        isPreparingWriteBoard ||
+                        isSeedingBoard ||
+                        !newBoardName.trim()
+                      }
+                    >
+                      {isCreatingBoard
+                        ? "Creating..."
+                        : isSeedingBoard
+                        ? "Seeding..."
+                        : "Create board"}
+                    </Button>
+                  </div>
                 </div>
 
                 {isPreparingWriteBoard && (
