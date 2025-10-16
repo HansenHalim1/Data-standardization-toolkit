@@ -1583,6 +1583,16 @@ useEffect(() => {
                       if (!writeStep.config.boardId) {
                         throw new Error("Select a board to write to before running.");
                       }
+                      if (
+                        !writeStep.config.columnMapping ||
+                        Object.keys(writeStep.config.columnMapping).length === 0
+                      ) {
+                        setToast({
+                          message: "Map at least one column before running the write-back.",
+                          variant: "error"
+                        });
+                        return;
+                      }
                       const response = await fetch("/api/recipes/run/execute", {
                         method: "POST",
                         headers: {
