@@ -786,13 +786,22 @@ export default function BoardViewClient() {
   );
 
   const applyPreparedRecipe = useCallback(
-    (recipe: RecipeDefinition | null) => {
+    (recipe: RecipeDefinition | null, boardColumnsOverride?: Record<string, string>) => {
       let nextRecipe: RecipeDefinition | null = null;
       let missingFields: string[] = [];
+      const effectiveBoardColumns =
+        dataSource === "board"
+          ? boardColumnsOverride ?? boardColumnNames
+          : {};
+
+      if (boardColumnsOverride) {
+        setBoardColumnNames(boardColumnsOverride);
+      }
+
       if (recipe) {
         const cloned = JSON.parse(JSON.stringify(recipe)) as RecipeDefinition;
-        if (dataSource === "board" && Object.keys(boardColumnNames).length > 0) {
-          const result = autoMapBoardColumns(cloned, boardColumnNames);
+        if (dataSource === "board" && Object.keys(effectiveBoardColumns).length > 0) {
+          const result = autoMapBoardColumns(cloned, effectiveBoardColumns);
           nextRecipe = result.recipe;
           missingFields = result.missingFields;
         } else {
@@ -1632,12 +1641,15 @@ useEffect(() => {
               )}
             </CardContent>
           </Card>
+            {/* === Diff & Actions (with Mapping UI) === */}
           <Card>
             <CardHeader>
               <CardTitle>Diff & Actions</CardTitle>
-              <CardDescription>Confirm changes before running write-back.</CardDescription>
+              <CardDescription>Map columns, review diffs, and run write-back.</CardDescription>
             </CardHeader>
-            <CardContent className="space-y-4">
+
+            <CardContent className="space-y-6">
+              {/* Select write board */}
               <div className="space-y-2">
                 <Label htmlFor="write-board-select">Write to board</Label>
                 <div className="flex flex-col gap-2 sm:flex-row">
@@ -1672,10 +1684,12 @@ useEffect(() => {
                     {isLoadingBoards ? "Refreshing..." : "Refresh"}
                   </Button>
                 </div>
+
+                {/* New board creation */}
                 <div className="flex flex-col gap-2 sm:flex-row">
                   <Input
                     value={newBoardName}
-                    onChange={(event) => setNewBoardName(event.target.value)}
+                    onChange={(e) => setNewBoardName(e.target.value)}
                     placeholder="New board name"
                     className="sm:flex-1"
                     disabled={isCreatingBoard || isPreparingWriteBoard || isSeedingBoard}
@@ -1691,47 +1705,20 @@ useEffect(() => {
                       !newBoardName.trim()
                     }
                   >
-                    {isCreatingBoard ? "Creating..." : isSeedingBoard ? "Seeding..." : "Create board"}
+                    {isCreatingBoard
+                      ? "Creating..."
+                      : isSeedingBoard
+                      ? "Seeding..."
+                      : "Create board"}
                   </Button>
                 </div>
+
                 {isPreparingWriteBoard && (
                   <p className="text-xs text-muted-foreground">Preparing board mapping…</p>
                 )}
-                {unmappedBoardFields.length > 0 && dataSource === "board" && (
-                  <div className="rounded-md border border-dashed border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-                    <p className="font-medium">Create missing monday columns?</p>
-                    <p className="mt-1">
-                      We couldn’t find columns for{" "}
-                      <span className="font-semibold">
-                        {unmappedBoardFields.map((field) => formatFieldLabel(field)).join(", ")}
-                      </span>
-                      . Would you like us to create them automatically?
-                    </p>
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="outline"
-                        onClick={() => {
-                          void ensureBoardColumns();
-                        }}
-                        disabled={isPreparingWriteBoard}
-                      >
-                        Create columns
-                      </Button>
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => setUnmappedBoardFields([])}
-                        disabled={isPreparingWriteBoard}
-                      >
-                        Not now
-                      </Button>
-                    </div>
-                  </div>
+                {writeBoardError && (
+                  <p className="text-xs text-destructive">{writeBoardError}</p>
                 )}
-                {writeBoardError && <p className="text-xs text-destructive">{writeBoardError}</p>}
                 {writeBoardId && writeBoardName && !writeBoardError && !isPreparingWriteBoard && (
                   <p className="text-xs text-muted-foreground">
                     Writing to <strong>{writeBoardName}</strong>
@@ -1739,14 +1726,82 @@ useEffect(() => {
                 )}
               </div>
 
+              {/* === Mapping UI start === */}
+              {Object.keys(boardColumnNames).length > 0 && (
+                <div className="space-y-3">
+                  <Label>Column Mapping</Label>
+                  <div className="grid gap-2">
+                    {fileColumns.length === 0 ? (
+                      <p className="text-sm text-muted-foreground">
+                        No source fields found — upload a file or preview data first.
+                      </p>
+                    ) : (
+                      fileColumns.map((sourceField) => {
+                        const writeStep = preparedRecipe?.steps.find(
+                          (s): s is WriteBackStep => s.type === "write_back"
+                        );
+                       const selected = writeStep?.config?.columnMapping?.[sourceField] ?? "";
+                        return (
+                          <div
+                            key={sourceField}
+                            className="flex items-center justify-between gap-2 border rounded-md px-2 py-1"
+                          >
+                            <span className="text-sm">{sourceField}</span>
+                            <Select
+                              value={selected}
+                              onChange={(e) => {
+                                setPreparedRecipe((prev) => {
+                                  if (!prev) return prev;
+                                  const clone = structuredClone(prev);
+                                  const write = clone.steps.find(
+                                    (s): s is WriteBackStep => s.type === "write_back"
+                                  );
+                                  if (!write) return clone;
+                                  write.config.columnMapping = {
+                                    ...(write.config.columnMapping ?? {}),
+                                    [sourceField]: e.target.value,
+                                  };
+
+                                  return clone;
+                                });
+                              }}
+                            >
+                              <option value="">— select monday column —</option>
+                              {Object.entries(boardColumnNames).map(([id, name]) => (
+                                <option key={id} value={id}>
+                                  {name}
+                                </option>
+                              ))}
+                            </Select>
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+                </div>
+              )}
+              {/* === Mapping UI end === */}
+
+              {/* Diff viewer */}
               {preview && <DiffViewer diff={preview.diff} />}
+
+              {/* Run button */}
               <Button
                 variant="secondary"
-                disabled={!preview || !context || isExecuting || !writeBoardId || isPreparingWriteBoard}
+                disabled={
+                  !preview ||
+                  !context ||
+                  isExecuting ||
+                  !writeBoardId ||
+                  isPreparingWriteBoard
+                }
                 onClick={() => {
                   if (!preview || !context || isExecuting) return;
                   if (!writeBoardId) {
-                    setToast({ message: "Select a board to write to before running.", variant: "error" });
+                    setToast({
+                      message: "Select a board to write to before running.",
+                      variant: "error",
+                    });
                     return;
                   }
                   void (async () => {
@@ -1756,22 +1811,20 @@ useEffect(() => {
                       const baseRecipe = preparedRecipe ?? BLANK_RECIPE;
                       const recipeForExecution = buildRecipeWithStandardization(baseRecipe);
                       const writeStep = recipeForExecution.steps.find(
-                        (step): step is WriteBackStep => step.type === "write_back"
+                        (s): s is WriteBackStep => s.type === "write_back"
                       );
                       if (!writeStep) {
                         throw new Error("Recipe missing write-back step.");
                       }
                       writeStep.config.boardId = writeBoardId;
-                      if (!writeStep.config.boardId) {
-                        throw new Error("Select a board to write to before running.");
-                      }
                       if (
                         !writeStep.config.columnMapping ||
                         Object.keys(writeStep.config.columnMapping).length === 0
                       ) {
                         setToast({
-                          message: "Map at least one column before running the write-back.",
-                          variant: "error"
+                          message:
+                            "Map at least one column before running the write-back.",
+                          variant: "error",
                         });
                         return;
                       }
@@ -1779,26 +1832,24 @@ useEffect(() => {
                         method: "POST",
                         headers: {
                           "Content-Type": "application/json",
-                          Authorization: `Bearer ${sessionToken}`
+                          Authorization: `Bearer ${sessionToken}`,
                         },
                         body: JSON.stringify({
                           tenantId: context.tenantId,
                           recipe: recipeForExecution,
                           runId: preview.runId,
                           previewRows: preview.rows,
-                          plan: context.plan
-                        })
+                          plan: context.plan,
+                        }),
                       });
-                      if (!response.ok) {
-                        throw new Error(await response.text());
-                      }
+                      if (!response.ok) throw new Error(await response.text());
                       const result = (await response.json()) as { rowsWritten: number };
                       setToast({
                         message: `Run complete. ${result.rowsWritten} rows processed.`,
-                        variant: "success"
+                        variant: "success",
                       });
-                    } catch (error) {
-                      setToast({ message: (error as Error).message, variant: "error" });
+                    } catch (err) {
+                      setToast({ message: (err as Error).message, variant: "error" });
                     } finally {
                       setIsExecuting(false);
                     }
@@ -1809,6 +1860,8 @@ useEffect(() => {
               </Button>
             </CardContent>
           </Card>
+          {/* === End Diff & Actions === */}
+
         </section>
       </PlanGate>
 
