@@ -290,24 +290,48 @@ function computeStandardizationTargets({
     seen.add(field);
   };
 
-  if (dataSource === "board" && recipe) {
-    const writeStep = recipe.steps.find(
-      (step): step is WriteBackStep => step.type === "write_back"
-    );
-    const columnMapping = writeStep?.config?.columnMapping ?? {};
-    for (const [field, columnId] of Object.entries(columnMapping)) {
-      if (!field) {
+  const mapStep = recipe?.steps.find(
+    (step): step is MapColumnsStep => step.type === "map_columns"
+  );
+
+  if (dataSource === "board") {
+    if (recipe) {
+      const writeStep = recipe.steps.find(
+        (step): step is WriteBackStep => step.type === "write_back"
+      );
+      const columnMapping = writeStep?.config?.columnMapping ?? {};
+      for (const [field, columnId] of Object.entries(columnMapping)) {
+        if (!field) {
+          continue;
+        }
+        const friendlyField = formatFieldLabel(field);
+        const columnName =
+          (columnId ? boardColumns[columnId] : undefined) ?? friendlyField;
+        const label =
+          columnName && columnName !== friendlyField
+            ? `${columnName} (${friendlyField})`
+            : columnName ?? friendlyField;
+        addTarget(field, label);
+      }
+    }
+
+    for (const columnName of Object.values(boardColumns)) {
+      if (!columnName) {
         continue;
       }
-      const friendlyField = formatFieldLabel(field);
-      const columnName =
-        (columnId ? boardColumns[columnId] : undefined) ??
-        friendlyField;
-      const label =
-        columnName && columnName !== friendlyField
-          ? `${columnName} (${friendlyField})`
-          : columnName ?? friendlyField;
-      addTarget(field, label);
+      const trimmedName = columnName.trim();
+      if (!trimmedName) {
+        continue;
+      }
+      let mappedField = trimmedName;
+      if (mapStep?.config?.mapping) {
+        const direct = mapStep.config.mapping[columnName] ?? mapStep.config.mapping[trimmedName];
+        if (direct && direct.trim().length > 0) {
+          mappedField = direct.trim();
+        }
+      }
+      const label = trimmedName.length > 0 ? trimmedName : formatFieldLabel(mappedField);
+      addTarget(mappedField, label);
     }
   }
 
@@ -536,17 +560,48 @@ export default function BoardViewClient() {
       const baseRecipe = recipe ?? selectedRecipe;
       if (baseRecipe) {
         const derivedSelections = deriveStandardizationSelectionsFromRecipe(baseRecipe);
-        const fields = getRecipeTargetFields(baseRecipe);
+        const fields = new Set(getRecipeTargetFields(baseRecipe));
+        const mapStep = baseRecipe.steps.find(
+          (step): step is MapColumnsStep => step.type === "map_columns"
+        );
+        if (dataSource === "board") {
+          for (const columnName of Object.values(boardColumnNames)) {
+            if (!columnName) {
+              continue;
+            }
+            const trimmed = columnName.trim();
+            if (!trimmed) {
+              continue;
+            }
+            let fieldName = trimmed;
+            if (mapStep?.config?.mapping) {
+              const mapped = mapStep.config.mapping[columnName] ?? mapStep.config.mapping[trimmed];
+              if (mapped && mapped.trim().length > 0) {
+                fieldName = mapped.trim();
+              }
+            }
+            fields.add(fieldName);
+          }
+        } else if (dataSource === "file") {
+          for (const column of fileColumns) {
+            if (column) {
+              fields.add(column);
+            }
+          }
+        }
         setStandardizationSelections((prev) => {
           const next: Record<string, string[]> = {};
-          for (const field of fields) {
+          fields.forEach((field) => {
+            if (!field) {
+              return;
+            }
             const derived = derivedSelections[field];
             const fallback = prev[field] ?? [];
             const chosen = derived && derived.length > 0 ? derived : fallback;
             if (chosen.length > 0) {
               next[field] = sortRuleIds(chosen);
             }
-          }
+          });
           if (selectionMapsEqual(prev, next)) {
             return prev;
           }
@@ -562,7 +617,7 @@ export default function BoardViewClient() {
       }
       setWriteBoardError(null);
     },
-    [selectedRecipe]
+    [selectedRecipe, dataSource, boardColumnNames, fileColumns]
   );
 
   const getSessionToken = useCallback(async () => {
