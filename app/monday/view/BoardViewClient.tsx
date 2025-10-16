@@ -1727,20 +1727,28 @@ useEffect(() => {
               </div>
 
               {/* === Mapping UI start === */}
-              {Object.keys(boardColumnNames).length > 0 && (
+            {(() => {
+              // Choose correct source: file or board
+              const sourceFields =
+                dataSource === "board" && Object.keys(boardColumnNames).length > 0
+                  ? Object.keys(boardColumnNames)
+                  : fileColumns;
+
+              return (
                 <div className="space-y-3">
                   <Label>Column Mapping</Label>
                   <div className="grid gap-2">
-                    {fileColumns.length === 0 ? (
+                    {sourceFields.length === 0 ? (
                       <p className="text-sm text-muted-foreground">
                         No source fields found — upload a file or preview data first.
                       </p>
                     ) : (
-                      fileColumns.map((sourceField) => {
+                      sourceFields.map((sourceField) => {
                         const writeStep = preparedRecipe?.steps.find(
                           (s): s is WriteBackStep => s.type === "write_back"
                         );
-                       const selected = writeStep?.config?.columnMapping?.[sourceField] ?? "";
+                        const selected = writeStep?.config?.columnMapping?.[sourceField] ?? "";
+
                         return (
                           <div
                             key={sourceField}
@@ -1761,7 +1769,6 @@ useEffect(() => {
                                     ...(write.config.columnMapping ?? {}),
                                     [sourceField]: e.target.value,
                                   };
-
                                   return clone;
                                 });
                               }}
@@ -1779,8 +1786,10 @@ useEffect(() => {
                     )}
                   </div>
                 </div>
-              )}
-              {/* === Mapping UI end === */}
+              );
+            })()}
+            {/* === Mapping UI end === */}
+
 
               {/* Diff viewer */}
               {preview && <DiffViewer diff={preview.diff} />}
