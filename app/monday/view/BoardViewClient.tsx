@@ -1727,114 +1727,116 @@ useEffect(() => {
               </div>
 
               {/* === Mapping UI start === */}
-            {(() => {
-              // Choose correct source: file or board
-              const sourceFields =
-                dataSource === "board" && Object.keys(boardColumnNames).length > 0
-                  ? Object.keys(boardColumnNames)
-                  : fileColumns;
+{(() => {
+  // Choose correct source: file or board
+  const sourceFields =
+    dataSource === "board" && Object.keys(boardColumnNames).length > 0
+      ? Object.keys(boardColumnNames)
+      : fileColumns;
 
-              // Normalize a string for comparison
-              const normalize = (s: string) =>
-                s.toLowerCase().replace(/[^a-z0-9]/g, "");
+  // Helper: normalize text for loose matching
+  const normalize = (s: string) =>
+    s.toLowerCase().replace(/[^a-z0-9]/g, "");
 
-              return (
-                <div className="space-y-3">
-                  <Label>Column Mapping</Label>
-                  <div className="grid gap-2">
-                    {sourceFields.length === 0 ? (
-                      <p className="text-sm text-muted-foreground">
-                        No source fields found — upload a file or preview data first.
-                      </p>
-                    ) : (
-                      sourceFields.map((sourceField) => {
-                        const writeStep = preparedRecipe?.steps.find(
-                          (s): s is WriteBackStep => s.type === "write_back"
-                        );
+  return (
+    <div className="space-y-3">
+      <Label>Column Mapping</Label>
+      <div className="grid gap-2">
+        {sourceFields.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            No source fields found — upload a file or preview data first.
+          </p>
+        ) : (
+          sourceFields.map((sourceField) => {
+            const writeStep = preparedRecipe?.steps.find(
+              (s): s is WriteBackStep => s.type === "write_back"
+            );
 
-                        // try to get the currently selected mapping
-                        let selected = writeStep?.config?.columnMapping?.[sourceField] ?? "";
+            // Current selection (if any)
+            let selected = writeStep?.config?.columnMapping?.[sourceField] ?? "";
 
-                        // auto-map by comparing normalized names
-                        if (!selected && Object.keys(boardColumnNames).length > 0) {
-                          const normalizedSource = normalize(sourceField);
-                          const autoMatch = Object.entries(boardColumnNames).find(
-                            ([, name]) => normalize(name) === normalizedSource
-                          );
-                          if (autoMatch) {
-                            const [autoId] = autoMatch;
-                            selected = autoId;
-                            // update preparedRecipe automatically
-                            setPreparedRecipe((prev) => {
-                              if (!prev) return prev;
-                              const clone = structuredClone(prev);
-                              const write = clone.steps.find(
-                                (s): s is WriteBackStep => s.type === "write_back"
-                              );
-                              if (!write) return clone;
-                              write.config.columnMapping = {
-                                ...(write.config.columnMapping ?? {}),
-                                [sourceField]: autoId,
-                              };
-                              return clone;
-                            });
-                          }
-                        }
-
-                        const friendlyName =
-                          selected && boardColumnNames[selected]
-                            ? boardColumnNames[selected]
-                            : "";
-
-                        return (
-                          <div
-                            key={sourceField}
-                            className="flex items-center justify-between gap-2 border rounded-md px-2 py-1"
-                          >
-                            <span className="text-sm">
-                              {sourceField}
-                              {friendlyName && (
-                                <span className="ml-2 text-xs text-muted-foreground">
-                                  → {friendlyName}
-                                </span>
-                              )}
-                            </span>
-                            <Select
-                              value={selected}
-                              onChange={(e) => {
-                                const newId = e.target.value;
-                                const newName = boardColumnNames[newId] ?? newId;
-                                setPreparedRecipe((prev) => {
-                                  if (!prev) return prev;
-                                  const clone = structuredClone(prev);
-                                  const write = clone.steps.find(
-                                    (s): s is WriteBackStep => s.type === "write_back"
-                                  );
-                                  if (!write) return clone;
-                                  write.config.columnMapping = {
-                                    ...(write.config.columnMapping ?? {}),
-                                    [sourceField]: newId,
-                                  };
-                                  return clone;
-                                });
-                              }}
-                            >
-                              <option value="">— select monday column —</option>
-                              {Object.entries(boardColumnNames).map(([id, name]) => (
-                                <option key={id} value={id}>
-                                  {name}
-                                </option>
-                              ))}
-                            </Select>
-                          </div>
-                        );
-                      })
-                    )}
-                  </div>
-                </div>
+            // === Auto-map by matching normalized names ===
+            if (!selected && Object.keys(boardColumnNames).length > 0) {
+              const normalizedSource = normalize(sourceField);
+              const autoMatch = Object.entries(boardColumnNames).find(
+                ([, name]) => normalize(name) === normalizedSource
               );
-            })()}
-            {/* === Mapping UI end === */}
+              if (autoMatch) {
+                const [autoId] = autoMatch;
+                selected = autoId;
+                setPreparedRecipe((prev) => {
+                  if (!prev) return prev;
+                  const clone = structuredClone(prev);
+                  const write = clone.steps.find(
+                    (s): s is WriteBackStep => s.type === "write_back"
+                  );
+                  if (!write) return clone;
+                  write.config.columnMapping = {
+                    ...(write.config.columnMapping ?? {}),
+                    [sourceField]: autoId,
+                  };
+                  return clone;
+                });
+              }
+            }
+
+            const friendlyName =
+              selected && boardColumnNames[selected]
+                ? boardColumnNames[selected]
+                : "";
+
+            // Friendly label for left side (hide raw ids)
+            const leftLabel = boardColumnNames[sourceField] ?? sourceField;
+
+            return (
+              <div
+                key={sourceField}
+                className="flex items-center justify-between gap-2 border rounded-md px-2 py-1"
+              >
+                <span className="text-sm">
+                  {leftLabel}
+                  {friendlyName && leftLabel !== friendlyName && (
+                    <span className="ml-2 text-xs text-muted-foreground">
+                      → {friendlyName}
+                    </span>
+                  )}
+                </span>
+                <Select
+                  value={selected}
+                  onChange={(e) => {
+                    const newId = e.target.value;
+                    setPreparedRecipe((prev) => {
+                      if (!prev) return prev;
+                      const clone = structuredClone(prev);
+                      const write = clone.steps.find(
+                        (s): s is WriteBackStep => s.type === "write_back"
+                      );
+                      if (!write) return clone;
+                      write.config.columnMapping = {
+                        ...(write.config.columnMapping ?? {}),
+                        [sourceField]: newId,
+                      };
+                      return clone;
+                    });
+                  }}
+                >
+                  <option value="">— select monday column —</option>
+                  {Object.entries(boardColumnNames).map(([id, name]) => (
+                    <option key={id} value={id}>
+                      {name}
+                    </option>
+                  ))}
+                </Select>
+              </div>
+            );
+          })
+        )}
+      </div>
+    </div>
+  );
+})()}
+{/* === Mapping UI end === */}
+
 
 
 
