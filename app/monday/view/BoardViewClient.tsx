@@ -830,6 +830,33 @@ export default function BoardViewClient() {
     }
   }, [preview, context, writeBoardId, preparedRecipe, uniquePreviewRows, getSessionToken, buildRecipeWithStandardization, context?.tenantId, context?.plan]);
 
+  const runCleanDedupe = useCallback(async () => {
+    if (!preview || !context || !preparedRecipe) return;
+    setIsExecuting(true);
+    try {
+      const sessionToken = await getSessionToken();
+      const baseRecipe = preparedRecipe ?? BLANK_RECIPE;
+      const recipeForExecution = buildRecipeWithStandardization(baseRecipe);
+      // Keep only map_columns, format, dedupe steps — remove write_back
+      const filteredSteps = recipeForExecution.steps.filter((s) => s.type === "map_columns" || s.type === "format" || s.type === "dedupe");
+      const dedupeRecipe = { ...recipeForExecution, steps: filteredSteps } as RecipeDefinition;
+
+      const response = await fetch("/api/recipes/run/execute", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${sessionToken}` },
+        body: JSON.stringify({ tenantId: context.tenantId, recipe: dedupeRecipe, previewRows: preview.rows, plan: context.plan })
+      });
+      if (!response.ok) throw new Error(await response.text());
+      const result = (await response.json()) as { rowsWritten: number; errors?: any[] };
+      // rowsWritten is the number of rows after dedupe (engine returns rowsWritten = currentRows.length when no write_back)
+      setToast({ message: `Dedupe complete: ${result.rowsWritten} unique of ${preview.rows.length} preview rows.`, variant: "success" });
+    } catch (err) {
+      setToast({ message: (err as Error).message, variant: "error" });
+    } finally {
+      setIsExecuting(false);
+    }
+  }, [preview, context, preparedRecipe, getSessionToken, buildRecipeWithStandardization]);
+
   const ensureBoardColumns = useCallback(async () => {
     if (!writeBoardId) { setToast({ message: "Select a board to update columns.", variant: "error" }); return; }
     setToast({ message: "Syncing missing columns with monday..." });
@@ -1610,6 +1637,17 @@ export default function BoardViewClient() {
                     }}
                   >
                     {isExecuting ? "Running..." : "Run write-back"}
+                  </Button>
+
+                  <Button
+                    variant="outline"
+                    disabled={!preview || isExecuting}
+                    onClick={() => {
+                      if (!preview || isExecuting) return;
+                      void runCleanDedupe();
+                    }}
+                  >
+                    {isExecuting ? "Working..." : "Clean duplicates"}
                   </Button>
 
                   <div className="flex items-center gap-2">
