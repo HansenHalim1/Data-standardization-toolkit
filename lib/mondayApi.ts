@@ -142,9 +142,21 @@ function formatColumnValue(rawValue: unknown, columnType?: string): unknown | nu
         text: normalized
       };
     case "phone":
-      return {
-        phone: normalized
-      };
+      // Normalize phone numbers: strip non-digits, preserve leading + if present
+      // monday.com expects a simple phone string; ensure it's reasonably formed
+      try {
+        const hasPlus = normalized.startsWith("+");
+        const digitsOnly = normalized.replace(/[^0-9]/g, "");
+        let phoneValue = digitsOnly;
+        if (hasPlus) phoneValue = `+${digitsOnly}`;
+        // Require a plausible length (7-15 digits)
+        if (!/^\+?\d{7,15}$/.test(phoneValue)) {
+          return null;
+        }
+        return { phone: phoneValue };
+      } catch {
+        return null;
+      }
     case "date": {
       const dateValue = normalizeDateValue(normalized);
       return dateValue ? { date: dateValue } : null;
@@ -474,8 +486,6 @@ export async function fetchBoards(accessToken: string, limit = 50): Promise<Mond
     boards: Array<{
       id: string;
       name: string;
-      board_kind?: string | null;
-      workspace?: { name?: string | null } | null;
     }>;
   }>({
     query: `
@@ -483,10 +493,6 @@ export async function fetchBoards(accessToken: string, limit = 50): Promise<Mond
         boards(limit: $limit) {
           id
           name
-          board_kind
-          workspace {
-            name
-          }
         }
       }
     `,
@@ -498,8 +504,8 @@ export async function fetchBoards(accessToken: string, limit = 50): Promise<Mond
   return (data.boards ?? []).map((board) => ({
     id: board.id,
     name: board.name,
-    workspaceName: board.workspace?.name ?? null,
-    kind: board.board_kind ?? null
+    workspaceName: null,
+    kind: null
   }));
 }
 
