@@ -725,7 +725,6 @@ export default function BoardViewClient() {
   }) => {
     setWriteBoardError(null);
     setWriteBoardId(boardId);
-    setFileColumns([]);
     const board = boards.find((entry) => entry.id === boardId);
     const resolvedName = options?.boardName ?? board?.name ?? "";
     setWriteBoardName(resolvedName);
