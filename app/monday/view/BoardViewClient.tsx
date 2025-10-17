@@ -791,21 +791,26 @@ export default function BoardViewClient() {
     const keyField = writeStep?.config?.keyColumn ?? writeStep?.config?.itemNameField ?? null;
     if (!keyField) return preview.rows;
 
-    const normalizeVal = (v: unknown) => (v === undefined || v === null ? "" : String(v).trim().toLowerCase());
+    const normalizeForComparison = (input: unknown) =>
+      String(input ?? "")
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
 
     // Build set from existing board keys if available
     const existingSet = (existingBoardKeys && existingBoardKeys.length > 0)
-      ? new Set(existingBoardKeys.map((k) => k.toString().trim().toLowerCase()))
+      ? new Set(existingBoardKeys.map((k) => normalizeForComparison(k)))
       : null;
 
     // Helper: find the value for the configured key field in a preview row.
     // We try exact key, then case-insensitive key match.
     const findKeyValue = (row: Record<string, unknown>) => {
-      if (row.hasOwnProperty(keyField)) return normalizeVal(row[keyField]);
+      if (row.hasOwnProperty(keyField)) return normalizeForComparison(row[keyField]);
       // case-insensitive lookup
       const lowerKey = keyField.toString().trim().toLowerCase();
       for (const k of Object.keys(row)) {
-        if (k.toString().trim().toLowerCase() === lowerKey) return normalizeVal(row[k]);
+        if (k.toString().trim().toLowerCase() === lowerKey) return normalizeForComparison(row[k]);
       }
       return "";
     };
@@ -877,6 +882,34 @@ export default function BoardViewClient() {
       // Keep only map_columns, format, dedupe steps — remove write_back
       const filteredSteps = recipeForExecution.steps.filter((s) => s.type === "map_columns" || s.type === "format" || s.type === "dedupe");
       const dedupeRecipe = { ...recipeForExecution, steps: filteredSteps } as RecipeDefinition;
+
+      // If dedupe step exists but has no keys configured, attempt to auto-populate keys
+      // using the recipe write_back keyColumn or itemNameField (these refer to target fields
+      // after mapping). As a last resort, fall back to the first preview column name.
+      try {
+        const dedupeStep = dedupeRecipe.steps.find((s) => s.type === "dedupe") as any | undefined;
+        if (dedupeStep) {
+          const keys: string[] = (dedupeStep.config?.keys ?? []).filter(Boolean);
+          if (!keys || keys.length === 0) {
+            const writeStep = recipeForExecution.steps.find((s): s is WriteBackStep => s.type === "write_back");
+            const candidate = writeStep?.config?.keyColumn ?? writeStep?.config?.itemNameField ?? null;
+            if (candidate) {
+              dedupeStep.config = dedupeStep.config ?? {};
+              dedupeStep.config.keys = [candidate];
+              setToast({ message: `Dedupe will use ${candidate} as key.`, variant: "default" });
+            } else if (preview.rows.length > 0) {
+              const firstField = Object.keys(preview.rows[0])[0];
+              if (firstField) {
+                dedupeStep.config = dedupeStep.config ?? {};
+                dedupeStep.config.keys = [firstField];
+                setToast({ message: `Dedupe will use ${firstField} as key (fallback).`, variant: "default" });
+              }
+            }
+          }
+        }
+      } catch (e) {
+        // non-fatal — continue with original dedupeRecipe
+      }
 
       const response = await fetch("/api/recipes/run/execute", {
         method: "POST",

@@ -118,15 +118,21 @@ export async function POST(request: Request) {
         const writeStep = preparedRecipe.steps.find((s): s is WriteBackStep => s.type === "write_back");
         const keyColumnId = writeStep?.config?.keyColumnId ?? null;
         if (keyColumnId) {
-          const vals: string[] = [];
-          for (const item of boardData.items) {
-            const col = item.column_values?.find((v) => v.id === keyColumnId);
-            if (col && col.text && col.text.toString().trim().length > 0) {
-              vals.push(col.text.toString().trim().toLowerCase());
+            const vals: string[] = [];
+            const normalize = (input: unknown) =>
+              String(input ?? "")
+                .toLowerCase()
+                .replace(/[^a-z0-9]+/g, " ")
+                .replace(/\s+/g, " ")
+                .trim();
+            for (const item of boardData.items) {
+              const col = item.column_values?.find((v) => v.id === keyColumnId);
+              if (col && col.text && col.text.toString().trim().length > 0) {
+                vals.push(normalize(col.text.toString()));
+              }
             }
+            existingKeys = Array.from(new Set(vals));
           }
-          existingKeys = Array.from(new Set(vals));
-        }
       } catch {
         // non-fatal
       }

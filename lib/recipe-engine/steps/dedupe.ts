@@ -22,8 +22,15 @@ export function dedupeRows(rows: RecipeRow[], config: DedupeConfig, allowFuzzy: 
   const exactSeen = new Map<string, number>();
   const exactRows: RecipeRow[] = [];
 
+  // Log signatures for debug
+  try {
+    console.log(JSON.stringify({ ts: new Date().toISOString(), level: "info", msg: "dedupe: computing exact signatures", keys }));
+  } catch {}
   rows.forEach((row, rowIndex) => {
     const signature = keys.map((key) => String(row[key] ?? "").toLowerCase()).join("|");
+    try {
+      console.log(JSON.stringify({ ts: new Date().toISOString(), level: "debug", msg: "dedupe: row signature", rowIndex, signature }));
+    } catch {}
     if (signature.trim() && exactSeen.has(signature)) {
       errors.push({
         rowIndex,

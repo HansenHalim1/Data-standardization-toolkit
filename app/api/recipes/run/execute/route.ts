@@ -49,6 +49,14 @@ export async function POST(request: Request) {
 
   const { tenantId: requestedTenantId, recipe, plan, previewRows, runId } = parsed.data;
   logger.info("Execute called", { tenantId: requestedTenantId ?? null, incomingPreviewRows: previewRows.length, recipeSteps: recipe.steps.map((s: any) => s.type) });
+  try {
+    const dedupeConfigs = recipe.steps.filter((s: any) => s.type === "dedupe").map((s: any) => s.config);
+    if (dedupeConfigs.length > 0) {
+      logger.info("Dedupe step configs", { dedupeConfigs });
+    }
+  } catch (e) {
+    // non-fatal
+  }
     if (previewRows.length === 0) {
       return new NextResponse("No rows to process", { status: 400 });
     }
