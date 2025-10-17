@@ -160,20 +160,26 @@ export function getApiClient({ accessToken }: { accessToken: string }) {
       })
     });
 
+    const responseText = await response.text().catch(() => null);
     if (!response.ok) {
-      throw new Error(`monday.com API request failed with status ${response.status}`);
+      // Include response body when available to aid debugging unauthorized/403 errors
+      const bodySnippet = typeof responseText === "string" ? responseText.slice(0, 200) : String(responseText);
+      throw new Error(`monday.com API request failed with status ${response.status}: ${bodySnippet}`);
     }
 
-    const json = (await response.json().catch(() => null)) as {
-      data?: T;
-      errors?: Array<{ message: string }>;
-    };
+    const json = (() => {
+      try {
+        return JSON.parse(responseText as string) as { data?: T; errors?: Array<{ message: string }> };
+      } catch {
+        return null as any;
+      }
+    })();
 
     if (!json?.data) {
       if (json?.errors?.length) {
         throw new Error(`monday.com API error: ${json.errors[0]?.message ?? "Unknown error"}`);
       }
-      throw new Error("monday.com API returned an empty response");
+      throw new Error(`monday.com API returned an empty response: ${String(responseText).slice(0, 400)}`);
     }
 
     return json.data;

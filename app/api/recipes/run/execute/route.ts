@@ -178,7 +178,9 @@ export async function POST(request: Request) {
       usageUpdated: !error
     });
   } catch (error) {
-    logger.warn("Execute failed", { error: (error as Error).message });
-    return new NextResponse("Unauthorized", { status: 401 });
+    const message = error instanceof Error ? error.message : String(error ?? "Unknown error");
+    logger.warn("Execute failed", { error: message });
+    // Return the error message in the response body to aid debugging client-side.
+    return NextResponse.json({ error: message }, { status: 401 });
   }
 }
