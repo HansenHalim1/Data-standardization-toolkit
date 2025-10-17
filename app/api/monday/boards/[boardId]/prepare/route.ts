@@ -4,7 +4,7 @@ import { getServiceSupabase } from "@/lib/db";
 import { verifyMondaySessionToken } from "@/lib/security";
 import { ensureBoardColumnsForRecipe, resolveOAuthToken } from "@/lib/mondayApi";
 import { prepareRecipeForBoard } from "@/lib/mondayRecipes";
-import type { RecipeDefinition } from "@/lib/recipe-engine";
+import type { RecipeDefinition, WriteBackStep } from "@/lib/recipe-engine";
 
 const recipeSchema = z.object({
   id: z.string(),
@@ -56,6 +56,26 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
     });
     const preparedRecipe = prepareRecipeForBoard(recipe, boardData);
 
+    // If the prepared recipe includes a key column (and a resolved key column id),
+    // collect the existing values on the board for uniqueness checks.
+    let existingKeys: string[] = [];
+    try {
+      const writeStep = preparedRecipe.steps.find((s): s is WriteBackStep => s.type === "write_back");
+      const keyColumnId = writeStep?.config?.keyColumnId ?? null;
+      if (keyColumnId) {
+        const vals: string[] = [];
+        for (const item of boardData.items) {
+          const col = item.column_values?.find((v) => v.id === keyColumnId);
+          if (col && col.text && col.text.toString().trim().length > 0) {
+            vals.push(col.text.toString().trim().toLowerCase());
+          }
+        }
+        existingKeys = Array.from(new Set(vals));
+      }
+    } catch (err) {
+      // non-fatal: don't block prepare if extracting existing keys fails
+    }
+
     return NextResponse.json({
       preparedRecipe,
       board: {
@@ -64,7 +84,8 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
         columns: boardData.columns.map((column) => ({
           id: column.id,
           title: column.title ?? column.id
-        }))
+        })),
+        existingKeys
       }
     });
   } catch (error) {

@@ -342,6 +342,7 @@ export default function BoardViewClient() {
   const [boardsError, setBoardsError] = useState<string | null>(null);
   const [selectedBoardId, setSelectedBoardId] = useState<string>("");
   const [sourceBoard, setSourceBoard] = useState<PreviewResponse["sourceBoard"] | null>(null);
+  const [existingBoardKeys, setExistingBoardKeys] = useState<string[] | null>(null);
   const [writeBoardId, setWriteBoardId] = useState<string>("");
   const [writeBoardName, setWriteBoardName] = useState<string>("");
   const [writeBoardError, setWriteBoardError] = useState<string | null>(null);
@@ -741,6 +742,11 @@ export default function BoardViewClient() {
           return acc;
         }, {});
         setBoardColumnNames(mapped);
+          // also pick up existing keys if returned by the prepare endpoint
+          // options doesn't include existingKeys directly; downstream code that calls this
+          // (prepare route) sets boardColumns. We guard here in case options.boardColumns
+          // is extended by prepare to include existingKeys.
+          // (When preview prepare populates existingKeys, handleWriteBoardSelect will pass it.)
       }
       applyPreparedRecipe(options.prepared);
       return;
@@ -760,13 +766,14 @@ export default function BoardViewClient() {
       if (!response.ok) throw new Error(await response.text());
       const data = (await response.json()) as {
         preparedRecipe: RecipeDefinition;
-        board?: { boardId: string; boardName: string; columns?: Array<{ id: string; title: string }> };
+        board?: { boardId: string; boardName: string; columns?: Array<{ id: string; title: string }>; existingKeys?: string[] };
       };
       if (data.board?.columns) {
         const mapped = data.board.columns.reduce<Record<string, string>>((acc, column) => {
           if (column.id) acc[column.id] = column.title ?? column.id; return acc;
         }, {});
         setBoardColumnNames(mapped);
+        if (data.board.existingKeys) setExistingBoardKeys(data.board.existingKeys as string[]);
       }
       applyPreparedRecipe(data.preparedRecipe);
       setWriteBoardName(data.board?.boardName ?? resolvedName);
@@ -776,6 +783,52 @@ export default function BoardViewClient() {
       setPreparingWriteBoard(false);
     }
   }, [applyPreparedRecipe, boards, buildRecipeWithStandardization, getSessionToken, preparedRecipe, sourceBoard?.boardId]);
+
+  // Helper: compute unique preview rows that don't match existing board keys
+  const uniquePreviewRows = useMemo(() => {
+    if (!preview || !preview.rows || preview.rows.length === 0) return [] as Record<string, unknown>[];
+    const writeStep = preparedRecipe?.steps.find((s): s is WriteBackStep => s.type === "write_back");
+    const keyField = writeStep?.config?.keyColumn ?? writeStep?.config?.itemNameField ?? null;
+    if (!keyField || !existingBoardKeys || existingBoardKeys.length === 0) return preview.rows;
+    const keySet = new Set(existingBoardKeys.map((k) => k.toString().trim().toLowerCase()));
+    return preview.rows.filter((r) => {
+      const raw = r[keyField];
+      if (raw === undefined || raw === null) return true;
+      const v = String(raw).trim().toLowerCase();
+      return !keySet.has(v);
+    });
+  }, [preview, preparedRecipe, existingBoardKeys]);
+
+  const runWriteBackUnique = useCallback(async () => {
+    if (!preview || !context || !writeBoardId || !preparedRecipe) return;
+    const rows = uniquePreviewRows;
+    if (!rows || rows.length === 0) { setToast({ message: "No unique rows to write.", variant: "error" }); return; }
+    setIsExecuting(true);
+    try {
+      const sessionToken = await getSessionToken();
+      const baseRecipe = preparedRecipe ?? BLANK_RECIPE;
+      const recipeForExecution = buildRecipeWithStandardization(baseRecipe);
+      const writeStep = recipeForExecution.steps.find((s): s is WriteBackStep => s.type === "write_back");
+      if (!writeStep) throw new Error("Recipe missing write-back step.");
+      writeStep.config.boardId = writeBoardId;
+      if (!writeStep.config.columnMapping || Object.keys(writeStep.config.columnMapping).length === 0) {
+        setToast({ message: "Map at least one column before running the write-back.", variant: "error" });
+        return;
+      }
+      const response = await fetch("/api/recipes/run/execute", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${sessionToken}` },
+        body: JSON.stringify({ tenantId: context.tenantId, recipe: recipeForExecution, previewRows: rows, plan: context.plan })
+      });
+      if (!response.ok) throw new Error(await response.text());
+      const result = (await response.json()) as { rowsWritten: number };
+      setToast({ message: `Run complete. ${result.rowsWritten} rows processed.`, variant: "success" });
+    } catch (err) {
+      setToast({ message: (err as Error).message, variant: "error" });
+    } finally {
+      setIsExecuting(false);
+    }
+  }, [preview, context, writeBoardId, preparedRecipe, uniquePreviewRows, getSessionToken, buildRecipeWithStandardization, context?.tenantId, context?.plan]);
 
   const ensureBoardColumns = useCallback(async () => {
     if (!writeBoardId) { setToast({ message: "Select a board to update columns.", variant: "error" }); return; }
@@ -1446,6 +1499,33 @@ export default function BoardViewClient() {
                               ))}
                             </div>
                           </div>
+                        </div>
+                      )}
+                      {/* Unique rows panel */}
+                      {existingBoardKeys && preview && preview.rows && preview.rows.length > 0 && (
+                        <div className="p-3 border rounded-md bg-white mt-3">
+                          <div className="flex items-center justify-between mb-2">
+                            <p className="text-sm font-medium">Unique rows vs board</p>
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                className="px-2 py-1 text-xs bg-green-600 text-white rounded"
+                                onClick={() => runWriteBackUnique()}
+                                disabled={isExecuting}
+                              >
+                                {isExecuting ? "Running..." : `Run write-back (${uniquePreviewRows.length} unique)`}
+                              </button>
+                            </div>
+                          </div>
+                          <p className="text-xs text-muted-foreground">{uniquePreviewRows.length} of {preview.rows.length} preview rows appear unique (not yet present on the selected board).</p>
+                          <details className="mt-2">
+                            <summary className="text-xs">Show sample unique rows</summary>
+                            <div className="mt-2 text-xs max-h-40 overflow-auto">
+                              {uniquePreviewRows.slice(0, 20).map((r, i) => (
+                                <pre key={i} className="whitespace-pre-wrap text-[11px]">{JSON.stringify(r, null, 2)}</pre>
+                              ))}
+                            </div>
+                          </details>
                         </div>
                       )}
                       <div className="grid gap-2">
