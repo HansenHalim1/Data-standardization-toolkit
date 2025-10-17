@@ -628,6 +628,7 @@ export default function BoardViewClient() {
     if (!token) throw new Error("Unable to retrieve monday session token.");
     return token;
   }, [mondayClient]);
+  
 
   const seedBoardWithPreview = useCallback(async (boardId: string, boardName: string, prepared: RecipeDefinition | null) => {
     if (!preview || preview.rows.length === 0 || !context) return "skipped" as const;
@@ -783,6 +784,88 @@ export default function BoardViewClient() {
       setPreparingWriteBoard(false);
     }
   }, [applyPreparedRecipe, boards, buildRecipeWithStandardization, getSessionToken, preparedRecipe, sourceBoard?.boardId]);
+
+  const runPreviewAction = useCallback(async (): Promise<boolean> => {
+    if (!context || isPreviewing) return false;
+    if (dataSource === "board") {
+      if (!selectedBoardId) { setToast({ message: "Select a board to preview.", variant: "error" }); return false; }
+      setIsPreviewing(true);
+      try {
+        const sessionToken = await getSessionToken();
+        const response = await fetch("/api/recipes/run/preview", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${sessionToken}` },
+          body: JSON.stringify({
+            source: { type: "board", boardId: selectedBoardId },
+            recipe: buildRecipeWithStandardization(preparedRecipe ?? BLANK_RECIPE),
+            plan: context.plan
+          })
+        });
+        if (!response.ok) throw new Error(await response.text());
+        const result = (await response.json()) as PreviewResponse;
+        const previewBoardColumns = (result.columns ?? []).filter((c) => Boolean(c.id)) as Array<{ id: string; title: string }>;
+        if (previewBoardColumns.length > 0) {
+          const mapped = previewBoardColumns.reduce<Record<string, string>>((acc, c) => { acc[c.id] = c.title ?? c.id; return acc; }, {});
+          setBoardColumnNames(mapped);
+        }
+        setPreview(result);
+        setSourceBoard(result.sourceBoard ?? null);
+        const prepared = result.preparedRecipe ?? (result.sourceBoard ? null : buildRecipeWithStandardization(BLANK_RECIPE));
+        if (result.sourceBoard) {
+          await handleWriteBoardSelect(result.sourceBoard.boardId, { prepared, boardName: result.sourceBoard.boardName, boardColumns: previewBoardColumns });
+          setSelectedBoardId(result.sourceBoard.boardId);
+        } else {
+          applyPreparedRecipe(prepared ?? null);
+          setWriteBoardId("");
+          setWriteBoardName("");
+        }
+        setToast({ message: `Preview ready${result.sourceBoard ? ` for ${result.sourceBoard.boardName}` : ""}`, variant: "success" });
+        return true;
+      } catch (error) {
+        setToast({ message: (error as Error).message, variant: "error" });
+        return false;
+      } finally {
+        setIsPreviewing(false);
+      }
+    }
+
+    // file
+    if (!uploadedFile) { setToast({ message: "Upload a file to preview.", variant: "error" }); return false; }
+    setIsPreviewing(true);
+    try {
+      const sessionToken = await getSessionToken();
+      const formData = new FormData();
+      formData.set("file", uploadedFile);
+      formData.set("tenantId", context.tenantId);
+      formData.set("recipe", JSON.stringify(buildRecipeWithStandardization(preparedRecipe ?? BLANK_RECIPE)));
+      formData.set("plan", context.plan);
+      const response = await fetch("/api/recipes/run/preview", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${sessionToken}` },
+        body: formData
+      });
+      if (!response.ok) throw new Error(await response.text());
+      const result = (await response.json()) as PreviewResponse;
+      setPreview(result);
+      applyPreparedRecipe(result.preparedRecipe ?? buildRecipeWithStandardization(BLANK_RECIPE));
+      setSourceBoard(null);
+      if (result.columns && result.columns.length > 0) {
+        const columns = result.columns.map((c) => c.title).filter((t): t is string => Boolean(t));
+        if (columns.length > 0) setFileColumns(Array.from(new Set(columns)));
+      } else if (result.rows.length > 0) {
+        const rowColumns = Object.keys(result.rows[0]).filter(Boolean);
+        if (rowColumns.length > 0) setFileColumns(Array.from(new Set(rowColumns)));
+      }
+      setBoardColumnNames({});
+      setToast({ message: "Preview ready", variant: "success" });
+      return true;
+    } catch (error) {
+      setToast({ message: (error as Error).message, variant: "error" });
+      return false;
+    } finally {
+      setIsPreviewing(false);
+    }
+  }, [context, isPreviewing, dataSource, selectedBoardId, preparedRecipe, getSessionToken, buildRecipeWithStandardization, uploadedFile, applyPreparedRecipe, handleWriteBoardSelect]);
 
   // Helper: compute unique preview rows that don't match existing board keys
   const uniquePreviewRows = useMemo(() => {
@@ -1389,7 +1472,21 @@ export default function BoardViewClient() {
 
                 <div className="flex justify-between">
                   <Button variant="ghost" onClick={back}>← Back</Button>
-                  <Button onClick={next} className="bg-[#1F76F0] text-white hover:bg-[#175CD3]">Next → Write / Export</Button>
+                  <Button
+                    onClick={() => {
+                      try {
+                        const base = preparedRecipe ?? BLANK_RECIPE;
+                        const withStd = buildRecipeWithStandardization(base);
+                        applyPreparedRecipe(withStd);
+                      } catch (e) {
+                        // fall back to normal next if something goes wrong
+                      }
+                      next();
+                    }}
+                    className="bg-[#1F76F0] text-white hover:bg-[#175CD3]"
+                  >
+                    Next → Write / Export
+                  </Button>
                 </div>
               </CardContent>
             </Card>
