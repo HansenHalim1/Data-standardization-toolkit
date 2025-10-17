@@ -69,12 +69,13 @@ export async function POST(request: Request) {
 
     const flags = flagsForPlan(tenant.plan, tenant.seats);
 
-    let recipe: RecipeDefinition;
-    let preparedRecipe: RecipeDefinition;
-    let planParam: string | undefined;
-    let tableRows: Record<string, unknown>[] = [];
-    let sourceBoard: { boardId: string; boardName: string } | null = null;
-    let previewColumns: Array<{ id: string | null; title: string }> = [];
+  let recipe: RecipeDefinition;
+  let preparedRecipe: RecipeDefinition;
+  let planParam: string | undefined;
+  let tableRows: Record<string, unknown>[] = [];
+  let sourceBoard: { boardId: string; boardName: string } | null = null;
+  let previewColumns: Array<{ id: string | null; title: string }> = [];
+  let existingKeys: string[] | undefined = undefined;
 
     if (contentType.includes("application/json")) {
       const jsonBody = await request.json().catch(() => null);
@@ -111,6 +112,24 @@ export async function POST(request: Request) {
         id: column.id,
         title: column.title ?? column.id
       }));
+
+      // Collect existing keys on the board for uniqueness checks when a key column is configured
+      try {
+        const writeStep = preparedRecipe.steps.find((s): s is WriteBackStep => s.type === "write_back");
+        const keyColumnId = writeStep?.config?.keyColumnId ?? null;
+        if (keyColumnId) {
+          const vals: string[] = [];
+          for (const item of boardData.items) {
+            const col = item.column_values?.find((v) => v.id === keyColumnId);
+            if (col && col.text && col.text.toString().trim().length > 0) {
+              vals.push(col.text.toString().trim().toLowerCase());
+            }
+          }
+          existingKeys = Array.from(new Set(vals));
+        }
+      } catch {
+        // non-fatal
+      }
     } else {
       const formData = await request.formData();
       const file = formData.get("file");
@@ -206,6 +225,12 @@ export async function POST(request: Request) {
 
     if (previewColumns.length > 0) {
       responsePayload.columns = previewColumns;
+    }
+
+    if (existingKeys && existingKeys.length > 0) {
+      responsePayload.board = {
+        existingKeys
+      };
     }
 
     return NextResponse.json(responsePayload);

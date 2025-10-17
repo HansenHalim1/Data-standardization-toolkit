@@ -742,11 +742,11 @@ export default function BoardViewClient() {
           return acc;
         }, {});
         setBoardColumnNames(mapped);
-          // also pick up existing keys if returned by the prepare endpoint
-          // options doesn't include existingKeys directly; downstream code that calls this
-          // (prepare route) sets boardColumns. We guard here in case options.boardColumns
-          // is extended by prepare to include existingKeys.
-          // (When preview prepare populates existingKeys, handleWriteBoardSelect will pass it.)
+      }
+      // If the prepare endpoint included existingKeys (attached in preview flow), set it
+      const anyOpts = options as any;
+      if (anyOpts.board?.existingKeys && Array.isArray(anyOpts.board.existingKeys)) {
+        setExistingBoardKeys(anyOpts.board.existingKeys as string[]);
       }
       applyPreparedRecipe(options.prepared);
       return;
