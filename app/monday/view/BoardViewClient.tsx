@@ -409,6 +409,83 @@ export default function BoardViewClient() {
     [preparedRecipe, boardColumnNames, fileColumns, dataSource]
   );
 
+  // Stronger fuzzy compare: token Jaccard + normalized Levenshtein
+  const columnComparison = useMemo(() => {
+    if (!writeBoardId) return null;
+    if (!fileColumns || fileColumns.length === 0) return null;
+    if (!boardColumnNames || Object.keys(boardColumnNames).length === 0) return null;
+
+    const normalize = (s: string | null | undefined) => (s ?? "").toString().trim().toLowerCase().replace(/["'`\(\)\[\]\{\}]/g, "").replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
+    const tokenize = (s: string) => Array.from(new Set(s.split(/\s+/).filter(Boolean)));
+
+    // normalized Levenshtein distance (simple implementation)
+    const levenshtein = (a: string, b: string) => {
+      if (a === b) return 0;
+      const m = a.length, n = b.length;
+      if (m === 0) return n;
+      if (n === 0) return m;
+      const dp: number[] = Array(n + 1).fill(0).map((_, j) => j);
+      for (let i = 1; i <= m; i++) {
+        let prev = dp[0]; dp[0] = i;
+        for (let j = 1; j <= n; j++) {
+          const cur = dp[j];
+          const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+          dp[j] = Math.min(dp[j] + 1, dp[j - 1] + 1, prev + cost);
+          prev = cur;
+        }
+      }
+      return dp[n];
+    };
+
+    const normalizedLevenshteinScore = (a: string, b: string) => {
+      const maxLen = Math.max(a.length, b.length);
+      if (maxLen === 0) return 1;
+      const dist = levenshtein(a, b);
+      return 1 - dist / maxLen; // 1 = identical, 0 = totally different
+    };
+
+    const jaccard = (aTokens: string[], bTokens: string[]) => {
+      const setA = new Set(aTokens), setB = new Set(bTokens);
+      const inter = Array.from(setA).filter((x) => setB.has(x)).length;
+      const uni = new Set([...setA, ...setB]).size;
+      return uni === 0 ? 0 : inter / uni;
+    };
+
+    const boardEntries = Object.entries(boardColumnNames).map(([id, name]) => ({ id, name, norm: normalize(name), tokens: tokenize(normalize(name)) }));
+    const boardNameToId = boardEntries.reduce<Record<string, string>>((acc, e) => { acc[e.name] = e.id; return acc; }, {});
+
+    const matches: Array<{ file: string; board: string; score: number }> = [];
+    const unmatchedFile: string[] = [];
+
+    for (const f of fileColumns) {
+      const fnorm = normalize(f);
+      if (!fnorm) continue;
+      const ftokens = tokenize(fnorm);
+
+      let best: { entry: { id: string; name: string; norm: string; tokens: string[] } | null; score: number } = { entry: null, score: 0 };
+      for (const entry of boardEntries) {
+        // combine token Jaccard and normalized levenshtein on the full string
+        const tokenScore = jaccard(ftokens, entry.tokens);
+        const levScore = normalizedLevenshteinScore(fnorm, entry.norm);
+        // weighted average (tokens are stronger signal)
+        const combined = 0.65 * tokenScore + 0.35 * levScore;
+        if (combined > best.score) best = { entry, score: combined };
+      }
+
+      // thresholds: accept combined >= 0.6, or exact token overlap >= 0.8
+      if (best.entry && (best.score >= 0.6 || jaccard(ftokens, best.entry.tokens) >= 0.8)) {
+        matches.push({ file: f, board: best.entry.name, score: Math.round(best.score * 100) / 100 });
+      } else {
+        unmatchedFile.push(f);
+      }
+    }
+
+    const matchedBoardNames = new Set(matches.map((m) => m.board));
+    const unmatchedBoard: string[] = boardEntries.filter((b) => !matchedBoardNames.has(b.name)).map((b) => b.name);
+
+    return { matches, unmatchedFile, unmatchedBoard, boardNameToId };
+  }, [writeBoardId, boardColumnNames, fileColumns]);
+
   useEffect(() => { unmappedFieldsRef.current = unmappedBoardFields; }, [unmappedBoardFields]);
 
   useEffect(() => {
@@ -1312,6 +1389,66 @@ export default function BoardViewClient() {
                   return (
                     <div className="space-y-3">
                       <Label>Column Mapping</Label>
+                      {/* Column comparison summary and auto-apply */}
+                      {columnComparison && (
+                        <div className="p-3 border rounded-md bg-white">
+                          <div className="flex items-center justify-between mb-2">
+                            <p className="text-sm font-medium">Column comparison with write board</p>
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                className="px-2 py-1 text-xs bg-blue-600 text-white rounded"
+                                onClick={() => {
+                                  // Auto-apply matched mappings into preparedRecipe
+                                  const mapping: Record<string, string> = {};
+                                  for (const m of columnComparison.matches) {
+                                    const boardId = columnComparison.boardNameToId[m.board];
+                                    if (boardId) mapping[m.file] = boardId;
+                                  }
+                                  if (Object.keys(mapping).length === 0) {
+                                    setToast({ message: "No matched columns to apply.", variant: "default" });
+                                    return;
+                                  }
+                                  setPreparedRecipe((prev) => {
+                                    if (!prev) return prev;
+                                    const clone = structuredClone(prev);
+                                    const write = clone.steps.find((s): s is WriteBackStep => s.type === "write_back");
+                                    if (!write) return clone;
+                                    write.config.columnMapping = { ...(write.config.columnMapping ?? {}), ...mapping };
+                                    return clone;
+                                  });
+                                  setToast({ message: `Applied ${Object.keys(mapping).length} matched mappings.`, variant: "success" });
+                                }}
+                              >
+                                Auto-apply matched mappings
+                              </button>
+                            </div>
+                          </div>
+                          <div className="grid grid-cols-3 gap-2 text-sm">
+                            <div>
+                              <p className="text-xs font-semibold">Matched</p>
+                              {columnComparison.matches.length === 0 ? <p className="text-xs text-muted-foreground">—</p> : columnComparison.matches.map((m) => (
+                                <div key={m.file} className="flex justify-between">
+                                  <span className="truncate">{m.file}</span>
+                                  <span className="text-muted-foreground">{m.board}</span>
+                                </div>
+                              ))}
+                            </div>
+                            <div>
+                              <p className="text-xs font-semibold">Unmatched file columns</p>
+                              {columnComparison.unmatchedFile.length === 0 ? <p className="text-xs text-muted-foreground">—</p> : columnComparison.unmatchedFile.map((f) => (
+                                <div key={f} className="truncate">{f}</div>
+                              ))}
+                            </div>
+                            <div>
+                              <p className="text-xs font-semibold">Unmatched board columns</p>
+                              {columnComparison.unmatchedBoard.length === 0 ? <p className="text-xs text-muted-foreground">—</p> : columnComparison.unmatchedBoard.map((b) => (
+                                <div key={b} className="truncate">{b}</div>
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+                      )}
                       <div className="grid gap-2">
                         {sourceFields.length === 0 ? (
                           <p className="text-sm text-muted-foreground">No source fields found — upload a file or preview data first.</p>
