@@ -923,13 +923,12 @@ export async function upsertRowsToBoard({
     }
 
     const createQuery = `
-      continue;
-        mutation CreateItem($boardId: ID!, $itemName: String!, $columnValues: JSON!) {
-          create_item(board_id: $boardId, item_name: $itemName, column_values: $columnValues) {
-            id
-          }
+      mutation CreateItem($boardId: ID!, $itemName: String!, $columnValues: JSON!) {
+        create_item(board_id: $boardId, item_name: $itemName, column_values: $columnValues) {
+          id
         }
-      `;
+      }
+    `;
     const createVariables = {
       boardId,
       itemName,
