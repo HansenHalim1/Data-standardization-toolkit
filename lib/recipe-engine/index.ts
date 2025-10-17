@@ -1,7 +1,6 @@
 import { mapColumns } from "./steps/map_columns";
 import { formatRows } from "./steps/format";
 import { validateRows } from "./steps/validate";
-import { dedupeRows } from "./steps/dedupe";
 import { writeBackRows } from "./steps/write_back";
 import { createLogger } from "@/lib/logging";
 
@@ -89,16 +88,7 @@ export type ValidateStep = {
   };
 };
 
-export type DedupeStep = {
-  type: "dedupe";
-  config: {
-    keys: string[];
-    fuzzy?: {
-      enabled: boolean;
-      threshold: number;
-    };
-  };
-};
+// dedupe step removed
 
 export type WriteBackStep = {
   type: "write_back";
@@ -112,7 +102,7 @@ export type WriteBackStep = {
   };
 };
 
-export type RecipeStep = MapColumnsStep | FormatStep | ValidateStep | DedupeStep | WriteBackStep;
+export type RecipeStep = MapColumnsStep | FormatStep | ValidateStep | WriteBackStep;
 
 export type RecipeDefinition = {
   id: string;
@@ -167,13 +157,7 @@ export function previewRecipe(
         errors.push(...validation.errors);
         break;
       }
-      case "dedupe": {
-        const deduped = dedupeRows(currentRows, step.config, options.allowFuzzy);
-        currentRows = deduped.rows;
-        errors.push(...deduped.errors);
-        diff.push(...deduped.diff);
-        break;
-      }
+      
       case "write_back":
         // Skip real write-back in preview mode.
         logger.debug("preview step skip write_back", { rows: currentRows.length });
@@ -217,12 +201,7 @@ export async function executeRecipe(
         errors.push(...validation.errors);
         break;
       }
-      case "dedupe": {
-        const deduped = dedupeRows(currentRows, step.config, options.allowFuzzy);
-        currentRows = deduped.rows;
-        errors.push(...deduped.errors);
-        break;
-      }
+      
       case "write_back":
         logger.info("about to write_back", { rows: currentRows.length, stepConfig: step.config });
         await writeBackRows(currentRows, step.config, options.writeBack);

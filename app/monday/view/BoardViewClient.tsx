@@ -872,60 +872,7 @@ export default function BoardViewClient() {
     }
   }, [preview, context, writeBoardId, preparedRecipe, uniquePreviewRows, getSessionToken, buildRecipeWithStandardization, context?.tenantId, context?.plan]);
 
-  const runCleanDedupe = useCallback(async () => {
-    if (!preview || !context || !preparedRecipe) return;
-    setIsExecuting(true);
-    try {
-      const sessionToken = await getSessionToken();
-      const baseRecipe = preparedRecipe ?? BLANK_RECIPE;
-      const recipeForExecution = buildRecipeWithStandardization(baseRecipe);
-      // Keep only map_columns, format, dedupe steps — remove write_back
-      const filteredSteps = recipeForExecution.steps.filter((s) => s.type === "map_columns" || s.type === "format" || s.type === "dedupe");
-      const dedupeRecipe = { ...recipeForExecution, steps: filteredSteps } as RecipeDefinition;
-
-      // If dedupe step exists but has no keys configured, attempt to auto-populate keys
-      // using the recipe write_back keyColumn or itemNameField (these refer to target fields
-      // after mapping). As a last resort, fall back to the first preview column name.
-      try {
-        const dedupeStep = dedupeRecipe.steps.find((s) => s.type === "dedupe") as any | undefined;
-        if (dedupeStep) {
-          const keys: string[] = (dedupeStep.config?.keys ?? []).filter(Boolean);
-          if (!keys || keys.length === 0) {
-            const writeStep = recipeForExecution.steps.find((s): s is WriteBackStep => s.type === "write_back");
-            const candidate = writeStep?.config?.keyColumn ?? writeStep?.config?.itemNameField ?? null;
-            if (candidate) {
-              dedupeStep.config = dedupeStep.config ?? {};
-              dedupeStep.config.keys = [candidate];
-              setToast({ message: `Dedupe will use ${candidate} as key.`, variant: "default" });
-            } else if (preview.rows.length > 0) {
-              const firstField = Object.keys(preview.rows[0])[0];
-              if (firstField) {
-                dedupeStep.config = dedupeStep.config ?? {};
-                dedupeStep.config.keys = [firstField];
-                setToast({ message: `Dedupe will use ${firstField} as key (fallback).`, variant: "default" });
-              }
-            }
-          }
-        }
-      } catch (e) {
-        // non-fatal — continue with original dedupeRecipe
-      }
-
-      const response = await fetch("/api/recipes/run/execute", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${sessionToken}` },
-        body: JSON.stringify({ tenantId: context.tenantId, recipe: dedupeRecipe, previewRows: preview.rows, plan: context.plan })
-      });
-      if (!response.ok) throw new Error(await response.text());
-      const result = (await response.json()) as { rowsWritten: number; errors?: any[] };
-      // rowsWritten is the number of rows after dedupe (engine returns rowsWritten = currentRows.length when no write_back)
-      setToast({ message: `Dedupe complete: ${result.rowsWritten} unique of ${preview.rows.length} preview rows.`, variant: "success" });
-    } catch (err) {
-      setToast({ message: (err as Error).message, variant: "error" });
-    } finally {
-      setIsExecuting(false);
-    }
-  }, [preview, context, preparedRecipe, getSessionToken, buildRecipeWithStandardization]);
+  // dedupe functionality removed
 
   const ensureBoardColumns = useCallback(async () => {
     if (!writeBoardId) { setToast({ message: "Select a board to update columns.", variant: "error" }); return; }
@@ -1709,16 +1656,7 @@ export default function BoardViewClient() {
                     {isExecuting ? "Running..." : "Run write-back"}
                   </Button>
 
-                  <Button
-                    variant="outline"
-                    disabled={!preview || isExecuting}
-                    onClick={() => {
-                      if (!preview || isExecuting) return;
-                      void runCleanDedupe();
-                    }}
-                  >
-                    {isExecuting ? "Working..." : "Clean duplicates"}
-                  </Button>
+                  {/* Clean duplicates removed */}
 
                   <div className="flex items-center gap-2">
                     <Label>Export</Label>
