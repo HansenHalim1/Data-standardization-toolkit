@@ -3,6 +3,7 @@ import { formatRows } from "./steps/format";
 import { validateRows } from "./steps/validate";
 import { dedupeRows } from "./steps/dedupe";
 import { writeBackRows } from "./steps/write_back";
+import { createLogger } from "@/lib/logging";
 
 export type RecipeRow = Record<string, unknown>;
 
@@ -142,19 +143,23 @@ export function previewRecipe(
   rows: RecipeRow[],
   options: EngineOptions
 ): RecipePreviewResult {
+  const logger = createLogger({ component: "recipe-engine" });
   let currentRows = [...rows];
   const errors: RecipeError[] = [];
   const diff: DiffEntry[] = [];
 
   for (const step of recipe.steps) {
+    logger.debug("preview step start", { step: step.type, rowsBefore: currentRows.length });
     switch (step.type) {
       case "map_columns":
         currentRows = mapColumns(currentRows, step.config);
+        logger.debug("preview step done", { step: step.type, rowsAfter: currentRows.length });
         break;
       case "format": {
         const { rows: formatted, diff: stepDiff } = formatRows(currentRows, step.config);
         currentRows = formatted;
         diff.push(...stepDiff);
+        logger.debug("preview step done", { step: step.type, rowsAfter: currentRows.length });
         break;
       }
       case "validate": {
@@ -171,6 +176,7 @@ export function previewRecipe(
       }
       case "write_back":
         // Skip real write-back in preview mode.
+        logger.debug("preview step skip write_back", { rows: currentRows.length });
         break;
       default:
         throw new Error(`Unsupported recipe step: ${(step as { type: string }).type}`);
@@ -189,17 +195,21 @@ export async function executeRecipe(
   rows: RecipeRow[],
   options: EngineOptions
 ): Promise<RecipeExecuteResult> {
+  const logger = createLogger({ component: "recipe-engine" });
   let currentRows = [...rows];
   const errors: RecipeError[] = [];
 
   for (const step of recipe.steps) {
+    logger.debug("execute step start", { step: step.type, rowsBefore: currentRows.length });
     switch (step.type) {
       case "map_columns":
         currentRows = mapColumns(currentRows, step.config);
+        logger.debug("execute step done", { step: step.type, rowsAfter: currentRows.length });
         break;
       case "format": {
         const { rows: formatted } = formatRows(currentRows, step.config);
         currentRows = formatted;
+        logger.debug("execute step done", { step: step.type, rowsAfter: currentRows.length });
         break;
       }
       case "validate": {
@@ -214,7 +224,9 @@ export async function executeRecipe(
         break;
       }
       case "write_back":
+        logger.info("about to write_back", { rows: currentRows.length, stepConfig: step.config });
         await writeBackRows(currentRows, step.config, options.writeBack);
+        logger.info("write_back completed", { rowsAfterWrite: currentRows.length });
         break;
       default:
         throw new Error(`Unsupported recipe step: ${(step as { type: string }).type}`);

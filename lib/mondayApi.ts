@@ -796,6 +796,7 @@ export async function upsertRowsToBoard({
 }): Promise<void> {
   const client = getApiClient({ accessToken });
   const boardData = await fetchBoardData(accessToken, boardId);
+  logger.info("Starting upsertRowsToBoard", { boardId, incomingRows: rows.length });
   const columnsById = new Map(boardData.columns.map((column) => [column.id, column]));
   const columnsByName = new Map(
     boardData.columns.map((column) => [normalizeColumnKey(column.title), column])
@@ -862,7 +863,8 @@ export async function upsertRowsToBoard({
       logger.warn("Skipping monday write-back row with no mapped values", {
         boardId,
         keyColumn,
-        keyValue: keyColumn ? row[keyColumn] : undefined
+        keyValue: keyColumn ? row[keyColumn] : undefined,
+        row
       });
       continue;
     }
@@ -921,6 +923,7 @@ export async function upsertRowsToBoard({
     }
 
     const createQuery = `
+      continue;
         mutation CreateItem($boardId: ID!, $itemName: String!, $columnValues: JSON!) {
           create_item(board_id: $boardId, item_name: $itemName, column_values: $columnValues) {
             id
@@ -963,4 +966,5 @@ export async function upsertRowsToBoard({
       keyMap.set(normalizedKey, createResult.create_item.id);
     }
   }
+  logger.info("Completed upsertRowsToBoard", { boardId });
 }

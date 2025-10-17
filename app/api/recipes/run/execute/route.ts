@@ -47,7 +47,8 @@ export async function POST(request: Request) {
     const { accountId, userId } = verifyMondaySessionToken(sessionToken);
     const accountKey = String(accountId);
 
-    const { tenantId: requestedTenantId, recipe, plan, previewRows, runId } = parsed.data;
+  const { tenantId: requestedTenantId, recipe, plan, previewRows, runId } = parsed.data;
+  logger.info("Execute called", { tenantId: requestedTenantId ?? null, incomingPreviewRows: previewRows.length, recipeSteps: recipe.steps.map((s: any) => s.type) });
     if (previewRows.length === 0) {
       return new NextResponse("No rows to process", { status: 400 });
     }
@@ -140,6 +141,8 @@ export async function POST(request: Request) {
       allowFuzzy: flags.fuzzyMatching,
       writeBack
     });
+
+    logger.info("Execute result", { tenantId: tenant.id, rowsProcessed: result.rowsProcessed, rowsWritten: result.rowsWritten, errors: result.errors.length });
 
     if (runId) {
       const completeUpdate: RunUpdate = {
