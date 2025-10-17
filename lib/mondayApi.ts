@@ -486,6 +486,8 @@ export async function fetchBoards(accessToken: string, limit = 50): Promise<Mond
     boards: Array<{
       id: string;
       name: string;
+      board_kind?: string | null;
+      workspace?: { name?: string | null } | null;
     }>;
   }>({
     query: `
@@ -493,6 +495,10 @@ export async function fetchBoards(accessToken: string, limit = 50): Promise<Mond
         boards(limit: $limit) {
           id
           name
+          board_kind
+          workspace {
+            name
+          }
         }
       }
     `,
@@ -504,8 +510,8 @@ export async function fetchBoards(accessToken: string, limit = 50): Promise<Mond
   return (data.boards ?? []).map((board) => ({
     id: board.id,
     name: board.name,
-    workspaceName: null,
-    kind: null
+    workspaceName: board.workspace?.name ?? null,
+    kind: board.board_kind ?? null
   }));
 }
 
