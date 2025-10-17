@@ -840,7 +840,7 @@ export async function upsertRowsToBoard({
     }
   }
 
-  for (const row of rows) {
+  for (const [idx, row] of rows.entries()) {
     const columnValues: Record<string, unknown> = {};
     for (const [field, column] of resolvedMapping) {
       const value = row[field];
@@ -864,6 +864,8 @@ export async function upsertRowsToBoard({
         boardId,
         keyColumn,
         keyValue: keyColumn ? row[keyColumn] : undefined,
+        rowIndex: idx + 1,
+        totalRows: rows.length,
         row
       });
       continue;
@@ -882,6 +884,7 @@ export async function upsertRowsToBoard({
       "Standardized row";
 
     if (existingItemId) {
+      logger.info("Attempting monday update", { boardId, rowIndex: idx + 1, totalRows: rows.length, itemId: existingItemId, key: normalizedKey, itemName });
       const query = `
           mutation UpdateItem($boardId: ID!, $itemId: ID!, $columnValues: JSON!) {
             change_multiple_column_values(board_id: $boardId, item_id: $itemId, column_values: $columnValues) {
@@ -918,7 +921,7 @@ export async function upsertRowsToBoard({
         });
         throw error;
       }
-      logger.debug("Updated monday item", { boardId, itemId: existingItemId });
+      logger.info("Updated monday item", { boardId, itemId: existingItemId, key: normalizedKey, itemName, rowIndex: idx + 1, totalRows: rows.length });
       continue;
     }
 
@@ -942,6 +945,7 @@ export async function upsertRowsToBoard({
         payload: { query: createQuery, variables: createVariables }
       })
     );
+    logger.info("Attempting monday create", { boardId, rowIndex: idx + 1, totalRows: rows.length, itemName, key: normalizedKey });
     let createResult: { create_item: { id: string } } | null = null;
     try {
       createResult = await client<{
@@ -960,9 +964,21 @@ export async function upsertRowsToBoard({
       });
       throw error;
     }
-
-    if (normalizedKey && createResult.create_item?.id) {
-      keyMap.set(normalizedKey, createResult.create_item.id);
+    // Log successful create and record key mapping if applicable
+    const createdId = createResult?.create_item?.id;
+    if (createdId) {
+      logger.info("Created monday item", {
+        boardId,
+        itemId: createdId,
+        key: normalizedKey || null,
+        itemName
+      });
+      logger.info("Create succeeded", { boardId, itemId: createdId, rowIndex: idx + 1, totalRows: rows.length });
+      if (normalizedKey) {
+        keyMap.set(normalizedKey, createdId);
+      }
+    } else {
+      logger.warn("Create response missing item id", { boardId, createResult });
     }
   }
   logger.info("Completed upsertRowsToBoard", { boardId });
