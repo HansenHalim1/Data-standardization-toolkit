@@ -182,6 +182,29 @@ export function getApiClient({ accessToken }: { accessToken: string }) {
       throw new Error(`monday.com API returned an empty response: ${String(responseText).slice(0, 400)}`);
     }
 
+    // If the response includes GraphQL errors, surface the first one instead of returning partial data
+    if (json?.errors?.length) {
+      throw new Error(`monday.com API error: ${json.errors[0]?.message ?? "Unknown error"} - ${String(responseText).slice(0,400)}`);
+    }
+
+    // If the returned data contains nulls for any top-level selection (e.g., create_item: null),
+    // log the full response text to help diagnose server-side reasons (permissions, validation, etc.).
+    try {
+      const topLevelValues = json && typeof json === "object" ? Object.values(json) : [];
+      if (topLevelValues.some((v) => v === null)) {
+        console.log(
+          JSON.stringify({
+            ts: new Date().toISOString(),
+            level: "warn",
+            msg: "monday.api.partial_response",
+            responseText: String(responseText).slice(0, 2000)
+          })
+        );
+      }
+    } catch {
+      /* ignore logging errors */
+    }
+
     return json.data;
   };
 }
