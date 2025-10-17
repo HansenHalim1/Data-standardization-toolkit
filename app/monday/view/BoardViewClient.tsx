@@ -789,14 +789,51 @@ export default function BoardViewClient() {
     if (!preview || !preview.rows || preview.rows.length === 0) return [] as Record<string, unknown>[];
     const writeStep = preparedRecipe?.steps.find((s): s is WriteBackStep => s.type === "write_back");
     const keyField = writeStep?.config?.keyColumn ?? writeStep?.config?.itemNameField ?? null;
-    if (!keyField || !existingBoardKeys || existingBoardKeys.length === 0) return preview.rows;
-    const keySet = new Set(existingBoardKeys.map((k) => k.toString().trim().toLowerCase()));
-    return preview.rows.filter((r) => {
-      const raw = r[keyField];
-      if (raw === undefined || raw === null) return true;
-      const v = String(raw).trim().toLowerCase();
-      return !keySet.has(v);
-    });
+    if (!keyField) return preview.rows;
+
+    const normalizeVal = (v: unknown) => (v === undefined || v === null ? "" : String(v).trim().toLowerCase());
+
+    // Build set from existing board keys if available
+    const existingSet = (existingBoardKeys && existingBoardKeys.length > 0)
+      ? new Set(existingBoardKeys.map((k) => k.toString().trim().toLowerCase()))
+      : null;
+
+    // Helper: find the value for the configured key field in a preview row.
+    // We try exact key, then case-insensitive key match.
+    const findKeyValue = (row: Record<string, unknown>) => {
+      if (row.hasOwnProperty(keyField)) return normalizeVal(row[keyField]);
+      // case-insensitive lookup
+      const lowerKey = keyField.toString().trim().toLowerCase();
+      for (const k of Object.keys(row)) {
+        if (k.toString().trim().toLowerCase() === lowerKey) return normalizeVal(row[k]);
+      }
+      return "";
+    };
+
+    // If we have existing board keys, filter against them. Otherwise, dedupe within preview rows.
+    if (existingSet) {
+      return preview.rows.filter((r) => {
+        const v = findKeyValue(r);
+        if (!v) return true; // keep rows with empty key so user can inspect
+        return !existingSet.has(v);
+      });
+    }
+
+    // Dedupe within the preview rows by the key value (preserve first occurrence)
+    const seen = new Set<string>();
+    const out: Record<string, unknown>[] = [];
+    for (const r of preview.rows) {
+      const v = findKeyValue(r);
+      if (!v) {
+        out.push(r); // keep rows without a key
+        continue;
+      }
+      if (!seen.has(v)) {
+        seen.add(v);
+        out.push(r);
+      }
+    }
+    return out;
   }, [preview, preparedRecipe, existingBoardKeys]);
 
   const runWriteBackUnique = useCallback(async () => {
