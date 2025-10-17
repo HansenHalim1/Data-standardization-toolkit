@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getServiceSupabase } from "@/lib/db";
 import { verifyMondaySessionToken } from "@/lib/security";
-import { createBoardForRecipe, fetchBoards, resolveOAuthToken, upsertRowsToBoardBatchSafe } from "@/lib/mondayApi";
+import { createBoardForRecipe, fetchBoards, resolveOAuthToken } from "@/lib/mondayApi";
 import { createLogger } from "@/lib/logging";
 import { prepareRecipeForBoard } from "@/lib/mondayRecipes";
 import type { RecipeDefinition } from "@/lib/recipe-engine";
@@ -51,7 +51,6 @@ const createBoardSchema = z.object({
   boardKind: z.enum(["public", "private", "share"]).optional(),
   workspaceId: z.union([z.string(), z.number()]).optional(),
   columns: z.array(z.string()).optional(),
-  seedRows: z.array(z.record(z.any())).optional(),
   recipe: recipeSchema
 });
 
@@ -73,7 +72,7 @@ export async function POST(request: Request) {
       return NextResponse.json(parsed.error.flatten(), { status: 400 });
     }
 
-  const { name, boardKind, workspaceId, recipe, columns, seedRows } = parsed.data;
+  const { name, boardKind, workspaceId, recipe, columns } = parsed.data;
     const recipeDefinition = recipe as RecipeDefinition;
     const resolvedBoardKind = boardKind ?? "share";
 
@@ -98,100 +97,7 @@ export async function POST(request: Request) {
       extraColumns: columns ?? undefined
     });
 
-    // If seedRows were provided, attempt to seed them into the created board.
-    let seedSummary: { totalSuccess: number; totalFailed: number; results?: unknown } | null = null;
-    if (seedRows && Array.isArray(seedRows) && seedRows.length > 0) {
-      try {
-        logger.info("Seeding requested rows", { boardId: summary.id, requestedSeedCount: seedRows.length });
-        // Build a mapping from source field (CSV header) -> monday column id using the created board columns.
-  const mapping: Record<string, string> = {};
-        const normalize = (v: string | null | undefined) =>
-          (v ?? "").toString().trim().toLowerCase().replace(/[^a-z0-9]/g, "");
-
-        // If client provided a `columns` array (CSV headers), prefer that list for mapping.
-        const headerCandidates: string[] = Array.isArray(columns) && columns.length > 0 ? columns : [];
-
-        for (const header of headerCandidates) {
-          const normHeader = normalize(header);
-          const match = boardData.columns.find((col) => {
-            const normTitle = normalize(col.title ?? col.id);
-            // match if normalized title equals normalized header or includes it
-            return (
-              normTitle === normHeader ||
-              normTitle.includes(normHeader) ||
-              normHeader.includes(normTitle)
-            );
-          });
-          if (match && match.id) {
-            mapping[header] = match.id;
-          }
-        }
-
-        logger.info("Derived header->column mapping", { boardId: summary.id, mapping, headers: headerCandidates });
-
-        // Fallback: if mapping is empty, try to derive mapping from recipe write_back.config.columnMapping
-        if (Object.keys(mapping).length === 0) {
-          const writeStep = (recipeDefinition.steps || []).find((s: any) => s.type === 'write_back') as any;
-          const recipeMapping: Record<string, string> = (writeStep && writeStep.config && writeStep.config.columnMapping) || {};
-          for (const [field, target] of Object.entries(recipeMapping)) {
-            // try to resolve target to a column id by matching title/id
-            const normTarget = normalize(String(target));
-            const match = boardData.columns.find((col) => normalize(col.id) === normTarget || normalize(col.title ?? col.id) === normTarget);
-            if (match && match.id) {
-              mapping[field] = match.id;
-            }
-          }
-        }
-
-        const keyStep = (recipeDefinition.steps || []).find((s: any) => s.type === 'write_back') as any;
-        const keyColumn = keyStep?.config?.keyColumn;
-        const keyColumnId = keyStep?.config?.keyColumnId;
-        const itemNameField = keyStep?.config?.itemNameField;
-
-        // Normalize seedRows keys so they align with the mapping keys (handle case/spacing differences)
-        const normKeyToMappingKey: Record<string, string> = {};
-        for (const mk of Object.keys(mapping)) {
-          normKeyToMappingKey[normalize(mk)] = mk;
-        }
-
-        const transformedRows = (seedRows as Array<Record<string, unknown>>).map((r) => {
-          const out: Record<string, unknown> = {};
-          for (const [k, v] of Object.entries(r)) {
-            const nk = normalize(k);
-            const mappingKey = normKeyToMappingKey[nk];
-            if (mappingKey) {
-              out[mappingKey] = v;
-            }
-          }
-          return out;
-        });
-
-        logger.info("Transformed seed rows to mapping keys", { boardId: summary.id, requested: seedRows.length, transformed: transformedRows.length });
-
-        const result = await upsertRowsToBoardBatchSafe({
-          accessToken,
-          boardId: summary.id,
-          columnMapping: mapping,
-          rows: transformedRows,
-          keyColumn,
-          keyColumnId,
-          itemNameField,
-          batchSize: 10,
-          delayMs: 300,
-          maxRetries: 3
-        });
-        seedSummary = {
-          totalSuccess: result.totalSuccess,
-          totalFailed: result.totalFailed,
-          results: result.results,
-          mappingUsed: mapping,
-          requestedSeedCount: seedRows.length
-        } as any;
-      } catch (err) {
-        logger.warn('Seeding rows to created board failed', { error: (err as Error).message });
-        // keep seedSummary null to indicate seeding failed
-      }
-    }
+    let seedSummary: null = null;
 
     const preparedRecipe = prepareRecipeForBoard(recipeDefinition, boardData);
 
@@ -212,8 +118,7 @@ export async function POST(request: Request) {
           title: column.title ?? column.id
         }))
       },
-      preparedRecipe,
-      seedSummary
+      preparedRecipe
     });
   } catch (error) {
     const message = (error as Error).message || "Unauthorized";
